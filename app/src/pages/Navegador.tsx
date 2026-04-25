@@ -1,37 +1,81 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { ArrowLeft, Loader2, Search } from "lucide-react";
 import AppShell from "../components/AppShell";
 
-type PageState = {
-  url: string;
-  title: string;
-  html: string;
-};
-
-type SandboxMessage =
-  | { source: "sandbox-browser"; kind: "navigate"; url: string }
-  | {
-      source: "sandbox-browser";
-      kind: "click" | "input" | "change" | "submit" | "key";
-      selector: string;
-      value?: string;
-    };
-
 export default function Navegador() {
   const [inputUrl, setInputUrl] = useState("");
-  const [page, setPage] = useState<PageState | null>(null);
   const [loading, setLoading] = useState(false);
   const [navError, setNavError] = useState<string | null>(null);
-  const iframeRef = useRef<HTMLIFrameElement | null>(null);
-  const eventInFlight = useRef(false);
-  const pageRef = useRef<PageState | null>(null);
+  const [hasView, setHasView] = useState(false);
+  const paneRef = useRef<HTMLDivElement | null>(null);
+  const hasViewRef = useRef(false);
 
-  const applyPage = useCallback((next: PageState) => {
-    pageRef.current = next;
-    setPage(next);
-    setInputUrl(next.url);
+  const updateBounds = useCallback(async () => {
+    if (!paneRef.current || !hasViewRef.current) return;
+    const r = paneRef.current.getBoundingClientRect();
+    console.log("[browser_pane] paneRef bounds", {
+      x: r.left,
+      y: r.top,
+      w: r.width,
+      h: r.height,
+      windowInner: { w: window.innerWidth, h: window.innerHeight },
+      dpr: window.devicePixelRatio,
+    });
+    try {
+      await invoke("set_browser_view_bounds", {
+        x: r.left,
+        y: r.top,
+        width: r.width,
+        height: r.height,
+      });
+    } catch (e) {
+      console.warn("set_browser_view_bounds failed:", e);
+    }
+  }, []);
+
+  useEffect(() => {
+    let unlistenNav: UnlistenFn | null = null;
+    let unlistenBlock: UnlistenFn | null = null;
+    listen<string>("browser-navigated", (e) => {
+      setInputUrl(e.payload);
+      setNavError(null);
+      // El webview puede haber reajustado su frame al navegar — re-sync bounds.
+      requestAnimationFrame(() => void updateBounds());
+      setTimeout(() => void updateBounds(), 200);
+    }).then((u) => {
+      unlistenNav = u;
+    });
+    listen<string>("browser-blocked", (e) => {
+      setNavError(`Sitio bloqueado: ${e.payload}`);
+    }).then((u) => {
+      unlistenBlock = u;
+    });
+    return () => {
+      unlistenNav?.();
+      unlistenBlock?.();
+    };
+  }, [updateBounds]);
+
+  useEffect(() => {
+    if (!hasView) return;
+    const ro = new ResizeObserver(() => void updateBounds());
+    if (paneRef.current) ro.observe(paneRef.current);
+    const onResize = () => void updateBounds();
+    window.addEventListener("resize", onResize);
+    void updateBounds();
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", onResize);
+    };
+  }, [hasView, updateBounds]);
+
+  useEffect(() => {
+    return () => {
+      invoke("close_browser_view").catch(() => {});
+    };
   }, []);
 
   const navigate = useCallback(
@@ -41,72 +85,34 @@ export default function Navegador() {
       setLoading(true);
       setNavError(null);
       try {
-        const next = await invoke<PageState>("browser_navigate", { url });
-        applyPage(next);
+        if (!hasViewRef.current) {
+          const r = paneRef.current?.getBoundingClientRect();
+          await invoke("open_browser_view", {
+            url,
+            x: r?.left ?? 0,
+            y: r?.top ?? 80,
+            width: r?.width ?? 800,
+            height: r?.height ?? 600,
+          });
+          hasViewRef.current = true;
+          setHasView(true);
+        } else {
+          await invoke("navigate_browser_view", { url });
+        }
+        setInputUrl(url);
+        // Re-sincronizar bounds tras la creación / navegación. El webview
+        // a veces se reajusta a un tamaño default antes de honrar el nuestro.
+        requestAnimationFrame(() => void updateBounds());
+        setTimeout(() => void updateBounds(), 100);
+        setTimeout(() => void updateBounds(), 400);
       } catch (err) {
         setNavError(humanizeError(err));
       } finally {
         setLoading(false);
       }
     },
-    [applyPage],
+    [updateBounds],
   );
-
-  const sendEvent = useCallback(
-    async (
-      kind: "click" | "input" | "change" | "submit" | "key",
-      selector: string,
-      value?: string,
-    ) => {
-      // input/change: fire-and-forget. Mantenemos el iframe estable mientras el
-      // usuario tipea. Solo replicamos el valor en Camoufox.
-      if (kind === "input" || kind === "change") {
-        invoke<PageState>("browser_event", {
-          kind,
-          selector,
-          value: value ?? null,
-        }).catch((err) => console.warn("[navegador] input ignored:", err));
-        return;
-      }
-      if (eventInFlight.current) return;
-      eventInFlight.current = true;
-      setLoading(true);
-      try {
-        const next = await invoke<PageState>("browser_event", {
-          kind,
-          selector,
-          value: value ?? null,
-        });
-        // Solo re-renderizar el iframe si la URL cambió (navegación real).
-        // Si fue un click que no navegó (ej. enfocar un input), conservamos el
-        // srcDoc actual para que el iframe NO se re-monte y el foco persista.
-        const prevUrl = pageRef.current?.url;
-        if (!prevUrl || next.url !== prevUrl) {
-          applyPage(next);
-        }
-      } catch (err) {
-        console.warn("[navegador] event ignored:", err);
-      } finally {
-        eventInFlight.current = false;
-        setLoading(false);
-      }
-    },
-    [applyPage],
-  );
-
-  useEffect(() => {
-    function onMessage(event: MessageEvent) {
-      const data = event.data as SandboxMessage | undefined;
-      if (!data || data.source !== "sandbox-browser") return;
-      if (data.kind === "navigate") {
-        void navigate(data.url);
-        return;
-      }
-      void sendEvent(data.kind, data.selector, data.value);
-    }
-    window.addEventListener("message", onMessage);
-    return () => window.removeEventListener("message", onMessage);
-  }, [navigate, sendEvent]);
 
   return (
     <AppShell>
@@ -154,14 +160,11 @@ export default function Navegador() {
         </div>
       )}
 
-      <div className="flex-1 rounded-xl overflow-hidden bg-white/10 backdrop-blur-sm">
-        <iframe
-          ref={iframeRef}
-          sandbox="allow-scripts"
-          srcDoc={page?.html ?? EMPTY_DOC}
-          title="Sandbox browser"
-          className="w-full h-full bg-transparent border-0"
-        />
+      <div
+        ref={paneRef}
+        className="flex-1 rounded-xl bg-white/5 backdrop-blur-sm flex items-center justify-center text-white/60 text-sm"
+      >
+        {!hasView && <span>Busca o escribe una URL para empezar.</span>}
       </div>
     </AppShell>
   );
@@ -177,30 +180,13 @@ function normalizeOrSearch(raw: string): string {
   if (!/\s/.test(t) && /^localhost(:\d+)?([\/?#].*)?$/i.test(t)) {
     return `https://${t}`;
   }
-  // DuckDuckGo HTML: server-renderizado, sin JS, sin anti-bot, sin tracking.
-  // Google fue rechazado porque /sorry y reCAPTCHA bloquean automation.
   return `https://html.duckduckgo.com/html/?q=${encodeURIComponent(t)}`;
 }
 
 function humanizeError(err: unknown): string {
   const raw = String(err);
-  if (raw.includes("Timeout")) return "La página tardó demasiado en responder.";
-  if (raw.includes("net::") || raw.includes("connect"))
-    return "No se pudo conectar al sitio.";
-  if (raw.includes("Bad Gateway") || raw.includes("502"))
-    return "El navegador interno no respondió.";
-  if (raw.length > 160) return "No se pudo cargar la página.";
+  if (raw.includes("not open")) return "El navegador interno no está disponible.";
+  if (raw.includes("invalid URL")) return "URL inválida.";
+  if (raw.length > 160) return "No se pudo abrir la página.";
   return raw;
 }
-
-const EMPTY_DOC = `<!doctype html><html><head><meta charset="utf-8"><style>
-  html, body { margin:0; padding:0; height:100%; background:transparent; }
-  body {
-    color: rgba(255,255,255,0.65);
-    font-family: -apple-system, BlinkMacSystemFont, "Inter", system-ui, sans-serif;
-    font-size: 14px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-</style></head><body>Busca algo o escribe una URL para empezar.</body></html>`;
