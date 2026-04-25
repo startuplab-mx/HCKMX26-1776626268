@@ -10,6 +10,9 @@ use tauri::{Manager, Runtime};
 #[cfg(target_os = "ios")]
 tauri::ios_plugin_binding!(init_plugin_native_browser_pane);
 
+#[cfg(target_os = "android")]
+const PLUGIN_IDENTIFIER: &str = "com.hackathon404.nativebrowserpane";
+
 #[cfg(mobile)]
 pub struct BrowserPane<R: Runtime>(pub tauri::plugin::PluginHandle<R>);
 
@@ -19,6 +22,12 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             #[cfg(target_os = "ios")]
             {
                 let handle = _api.register_ios_plugin(init_plugin_native_browser_pane)?;
+                _app.manage(BrowserPane(handle));
+            }
+            #[cfg(target_os = "android")]
+            {
+                let handle = _api
+                    .register_android_plugin(PLUGIN_IDENTIFIER, "NativeBrowserPanePlugin")?;
                 _app.manage(BrowserPane(handle));
             }
             Ok(())

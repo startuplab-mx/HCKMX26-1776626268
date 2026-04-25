@@ -2,18 +2,11 @@ import "./App.css";
 import { Compass, Calculator, StickyNote } from "lucide-react";
 import { FaFacebookF, FaInstagram } from "react-icons/fa6";
 import App from "./components/App";
+import AppShell from "./components/AppShell";
 
 export default function Desktop() {
   return (
-    <main
-      className="px-4 py-6"
-      style={{
-        paddingTop: "max(1.5rem, env(safe-area-inset-top))",
-        paddingBottom: "max(1.5rem, env(safe-area-inset-bottom))",
-        paddingLeft: "max(1rem, env(safe-area-inset-left))",
-        paddingRight: "max(1rem, env(safe-area-inset-right))",
-      }}
-    >
+    <AppShell>
       <div className="flex flex-wrap items-center justify-center gap-4">
         <App name="Navegador" nav="/navegador">
           <Compass className="w-8 h-8" strokeWidth={1.5} />
@@ -31,6 +24,6 @@ export default function Desktop() {
           <StickyNote className="w-8 h-8" strokeWidth={1.5} />
         </App>
       </div>
-    </main>
+    </AppShell>
   );
 }

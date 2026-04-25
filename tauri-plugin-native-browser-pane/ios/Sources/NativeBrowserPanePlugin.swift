@@ -196,18 +196,15 @@ class NativeBrowserPanePlugin: Plugin {
   }
 
   /// Convierte coords del HTML viewport (lo que da `getBoundingClientRect` en
-  /// React) a coords del bounds del WKWebView padre. El HTML viewport en iOS
-  /// arranca DEBAJO del safe area top (status bar). El padre WKWebView tiene
-  /// bounds.origin = (0,0) que es el TOP del status bar. Sumamos el inset del
-  /// scrollView (que iOS aplica para insetar el HTML viewport) para que la
-  /// posición visual matchee.
+  /// React) a coords del bounds del WKWebView padre.
+  ///
+  /// Con `viewport-fit=cover` en el `<meta viewport>`, el HTML viewport cubre
+  /// el full WKWebView frame (sin auto-inset) y React respeta safe area via
+  /// `env(safe-area-inset-*)` en CSS padding. Por tanto las coords reportadas
+  /// por `getBoundingClientRect` ya incluyen el offset del status bar — no
+  /// hay que sumar el `adjustedContentInset` (que duplicaría el offset).
   static func adjustedFrame(_ requested: CGRect, in parent: UIView) -> CGRect {
-    var frame = requested
-    if let wv = parent as? WKWebView {
-      let inset = wv.scrollView.adjustedContentInset
-      frame = frame.offsetBy(dx: inset.left, dy: inset.top)
-    }
-    return clampToParent(frame, parent: parent.bounds)
+    return clampToParent(requested, parent: parent.bounds)
   }
 }
 
