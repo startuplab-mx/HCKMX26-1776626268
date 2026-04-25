@@ -1,7 +1,7 @@
 export type Risk = "CRÍTICO" | "ALTO" | "MEDIO" | "BAJO";
 export type RiskFilter = "TODOS" | Risk;
 
-export type PageId = "overview" | "incidents" | "map" | "reports" | "settings";
+export type PageId = "overview" | "incidents" | "settings";
 
 export type IconName =
   | "shield" | "alert" | "users" | "block" | "globe" | "trend"

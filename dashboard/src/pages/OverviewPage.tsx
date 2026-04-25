@@ -12,7 +12,6 @@ import { DonutChart } from "../components/DonutChart";
 import { IncidentsTable } from "../components/IncidentsTable";
 import { KpiCard } from "../components/KpiCard";
 import { LiveFeed } from "../components/LiveFeed";
-import { PulseDot } from "../components/PulseDot";
 import { StatesRawTable } from "../components/StatesRawTable";
 import { StatesTable } from "../components/StatesTable";
 import { WeekChart } from "../components/WeekChart";
@@ -65,32 +64,16 @@ export function OverviewPage() {
         <Card flex={1} title="Servicios" sub="Distribución por servicio">
           {platforms.data && <DonutChart segments={platforms.data} />}
         </Card>
+      </div>
 
+      <div style={{ display: "flex", gap: "12px", flexShrink: 0 }}>
         <Card flex={1} title="Tendencia Semanal" sub="Alertas últimos 7 días">
           {weekly.data && <WeekChart data={weekly.data} labels={weekDays} />}
           <WeeklyStats data={weekly.data ?? []} />
-          <div
-            style={{
-              marginTop: "14px",
-              borderTop: `1px solid ${T.border}`,
-              paddingTop: "12px",
-            }}
-          >
-            <div
-              style={{
-                fontSize: "11px",
-                fontFamily: "Space Grotesk",
-                color: T.text2,
-                marginBottom: "8px",
-                display: "flex",
-                alignItems: "center",
-                gap: "6px",
-              }}
-            >
-              <PulseDot color={T.secondary} /> FEED EN VIVO
-            </div>
-            {incidents.data && <LiveFeed seed={incidents.data} />}
-          </div>
+        </Card>
+
+        <Card flex={1} title="Feed en Vivo" sub="Eventos entrantes en tiempo real" rightAccent="LIVE">
+          {incidents.data && <LiveFeed seed={incidents.data} />}
         </Card>
       </div>
 

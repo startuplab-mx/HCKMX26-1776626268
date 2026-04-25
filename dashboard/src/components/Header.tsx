@@ -6,8 +6,6 @@ import { PulseDot } from "./PulseDot";
 const labels: Record<PageId, string> = {
   overview: "Service Overview",
   incidents: "Gestión de Eventos",
-  map: "Vista Regional",
-  reports: "Reportes & Exportación",
   settings: "Configuración",
 };
 

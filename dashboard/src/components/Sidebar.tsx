@@ -11,8 +11,6 @@ interface NavItem {
 const NAV: NavItem[] = [
   { id: "overview", icon: "home", label: "Overview" },
   { id: "incidents", icon: "alert", label: "Eventos" },
-  { id: "map", icon: "globe", label: "Geografía" },
-  { id: "reports", icon: "report", label: "Reportes" },
   { id: "settings", icon: "settings", label: "Config" },
 ];
 

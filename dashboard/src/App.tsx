@@ -11,8 +11,6 @@ import type { PageId } from "./types";
 const PAGES: Record<PageId, ReactNode> = {
   overview: <OverviewPage />,
   incidents: <PlaceholderPage title="Gestión de Eventos" icon="alert" />,
-  map: <PlaceholderPage title="Vista Geográfica Global" icon="globe" />,
-  reports: <PlaceholderPage title="Reportes & Exportación" icon="report" />,
   settings: <PlaceholderPage title="Configuración del Sistema" icon="settings" />,
 };
 
