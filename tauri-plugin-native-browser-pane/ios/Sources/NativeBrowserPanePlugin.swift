@@ -2,6 +2,8 @@
 // UIViewController principal. Posicionado y dimensionado desde Rust/JS para
 // que coincida con el placeholder paneRef en la React UI.
 
+import CoreImage
+import CoreImage.CIFilterBuiltins
 import Foundation
 import SwiftRs
 import Tauri
@@ -30,41 +32,175 @@ class NavigateArgs: Decodable {
 class NativeBrowserPanePlugin: Plugin {
   var webView: WKWebView?
   var navDelegate: NativeBrowserPaneNavDelegate?
+  var filterHandler: FilterMessageHandler?
 
   static let userAgent =
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1"
 
+  // El contenido de filter.js v2 — batched text + URL-based image (mobile path).
+  // Mantener en sync conceptualmente con app/src-tauri/src/filter.js, pero la
+  // versión iOS solo necesita las branches de webkit.messageHandlers.
   static let filterScript = """
   (function () {
     if (window.__sandboxFilterInstalled) return;
     window.__sandboxFilterInstalled = true;
-    var BAD_TEXT = ["porn", "xxx", "nsfw"];
-    function showBlocked() {
+    try {
+      var pre = document.createElement('style');
+      pre.id = '__sandbox_pre';
+      pre.textContent =
+        "p:not(.__sb_done),h1:not(.__sb_done),h2:not(.__sb_done)," +
+        "h3:not(.__sb_done),h4:not(.__sb_done),h5:not(.__sb_done)," +
+        "h6:not(.__sb_done){color:transparent !important;text-shadow:none !important;}" +
+        "img:not(.__sb_done){filter:blur(24px) !important;}";
+      (document.head || document.documentElement).appendChild(pre);
+    } catch (_) {}
+
+    var BAD_URL_PATTERNS = [/porn/i,/xxx/i,/xvideos/i,/pornhub/i,/redtube/i,/youporn/i,/xnxx/i,/onlyfans/i,/chaturbate/i,/\\bnsfw\\b/i];
+    var BAD_TEXT = ['porn','xxx','nsfw'];
+    function showBlocked(reason) {
       try {
         document.open();
-        document.write('<html><body style="font-family:-apple-system;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#fde68a;color:#7c2d12"><div style="text-align:center;padding:32px"><div style="font-size:48px">🚫</div><h1>Sitio bloqueado</h1><p>Este contenido no está permitido.</p></div></body></html>');
+        document.write('<html><body style="font-family:-apple-system;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#fde68a;color:#7c2d12"><div style="text-align:center;padding:32px"><div style="font-size:48px">🚫</div><h1>Sitio bloqueado</h1><p>'+(reason||'')+'</p></div></body></html>');
         document.close();
       } catch (_) {}
+    }
+    function checkUrl() {
+      var url = location.href || '';
+      for (var i = 0; i < BAD_URL_PATTERNS.length; i++) {
+        if (BAD_URL_PATTERNS[i].test(url)) { showBlocked('URL bloqueada'); return false; }
+      }
+      return true;
     }
     function checkText() {
       var b = document.body;
       if (!b) return true;
-      var t = (b.innerText || "").toLowerCase();
+      var t = (b.innerText || '').toLowerCase();
       if (t.length < 50) return true;
       for (var i = 0; i < BAD_TEXT.length; i++) {
         var occ = t.split(BAD_TEXT[i]).length - 1;
-        if (occ >= 3) { showBlocked(); return false; }
+        if (occ >= 3) { showBlocked('Contenido inapropiado'); return false; }
       }
       return true;
     }
+    if (!checkUrl()) return;
+
+    // Bridges hacia Swift (WKScriptMessageHandlerWithReply en iOS 14+).
+    function callFilterTexts(texts) {
+      try {
+        if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.filterTexts) {
+          return window.webkit.messageHandlers.filterTexts.postMessage(texts);
+        }
+      } catch (_) {}
+      return Promise.resolve(texts.slice());
+    }
+    function callFilterImage(url) {
+      try {
+        if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.filterImage) {
+          return window.webkit.messageHandlers.filterImage.postMessage(url);
+        }
+      } catch (_) {}
+      return Promise.resolve(url);
+    }
+
+    var imageCache = {}, imageInFlight = 0, imageQueue = [], IMG_CONC = 2;
+    function dispatchImage() {
+      while (imageInFlight < IMG_CONC && imageQueue.length > 0) {
+        var job = imageQueue.shift();
+        imageInFlight++;
+        callFilterImage(job.url).then(function (out) { job.resolve(out); }, function () { job.resolve(job.url); }).then(function () { imageInFlight--; dispatchImage(); });
+      }
+    }
+    function filterImageCached(url) {
+      if (imageCache[url]) return imageCache[url];
+      imageCache[url] = new Promise(function (resolve) { imageQueue.push({ url: url, resolve: resolve }); dispatchImage(); });
+      return imageCache[url];
+    }
+
+    function reveal(el) { el.classList.add('__sb_done'); }
+    function processImg(img) {
+      if (!img || img.classList.contains('__sb_done')) return;
+      var src = img.currentSrc || img.src || '';
+      if (!src || src.indexOf('data:') === 0 || src.indexOf('blob:') === 0) { reveal(img); return; }
+      var w = img.naturalWidth || img.width || 0;
+      var h = img.naturalHeight || img.height || 0;
+      if (w > 0 && h > 0 && (w < 64 || h < 64)) { reveal(img); return; }
+      filterImageCached(src).then(function (out) {
+        if (out && out !== src) { try { img.src = out; } catch (_) {} }
+        reveal(img);
+      }, function () { reveal(img); });
+    }
+
+    var imgObserver = null;
+    try {
+      imgObserver = new IntersectionObserver(function (entries) {
+        for (var i = 0; i < entries.length; i++) {
+          var e = entries[i];
+          if (e.isIntersecting) { imgObserver.unobserve(e.target); processImg(e.target); }
+        }
+      }, { rootMargin: '200px' });
+    } catch (_) { imgObserver = null; }
+    function queueImg(img) {
+      if (!img || img.classList.contains('__sb_done')) return;
+      if (imgObserver) { try { imgObserver.observe(img); return; } catch (_) {} }
+      processImg(img);
+    }
+
+    var TEXT_SELECTOR = 'p:not(.__sb_done),h1:not(.__sb_done),h2:not(.__sb_done),h3:not(.__sb_done),h4:not(.__sb_done),h5:not(.__sb_done),h6:not(.__sb_done)';
+    function scanRoot(root) {
+      if (!root || !root.querySelectorAll) return;
+      try {
+        var imgs = root.querySelectorAll('img:not(.__sb_done)');
+        for (var j = 0; j < imgs.length; j++) queueImg(imgs[j]);
+      } catch (_) {}
+      var elems = [], texts = [];
+      try {
+        var nodes = root.querySelectorAll(TEXT_SELECTOR);
+        for (var i = 0; i < nodes.length; i++) {
+          var t = nodes[i].textContent || '';
+          if (t.length < 3) { reveal(nodes[i]); continue; }
+          elems.push(nodes[i]); texts.push(t);
+        }
+      } catch (_) {}
+      if (texts.length === 0) return;
+      callFilterTexts(texts).then(function (out) {
+        for (var k = 0; k < elems.length; k++) {
+          var v = (out && out[k] != null) ? out[k] : texts[k];
+          try { elems[k].textContent = v; } catch (_) {}
+          reveal(elems[k]);
+        }
+      }, function () {
+        for (var k = 0; k < elems.length; k++) reveal(elems[k]);
+      });
+    }
+
+    var scanScheduled = false;
+    function scheduleScan() {
+      if (scanScheduled) return;
+      scanScheduled = true;
+      setTimeout(function () { scanScheduled = false; scanRoot(document.body || document.documentElement); }, 50);
+    }
+
     function onReady() {
       if (!checkText()) return;
+      scanRoot(document.body);
       try {
-        var obs = new MutationObserver(function(){ if (!checkText()) obs.disconnect(); });
-        obs.observe(document.body, { childList: true, subtree: true, characterData: true });
+        var obs = new MutationObserver(function (muts) {
+          var needScan = false;
+          for (var i = 0; i < muts.length; i++) {
+            if (muts[i].type === 'childList' && muts[i].addedNodes.length > 0) needScan = true;
+            if (muts[i].type === 'attributes' && muts[i].target && muts[i].target.tagName === 'IMG' && muts[i].attributeName === 'src') {
+              muts[i].target.classList.remove('__sb_done');
+              queueImg(muts[i].target);
+            }
+          }
+          if (needScan) scheduleScan();
+        });
+        obs.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['src'] });
+        var blockObs = new MutationObserver(function () { if (!checkText()) blockObs.disconnect(); });
+        blockObs.observe(document.body, { childList: true, subtree: true, characterData: true });
       } catch (_) {}
     }
-    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", onReady);
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', onReady);
     else onReady();
   })();
   """
@@ -95,6 +231,15 @@ class NativeBrowserPanePlugin: Plugin {
         forMainFrameOnly: false
       )
       config.userContentController.addUserScript(userScript)
+
+      // Bridge JS → Swift para los dos filtros (iOS 14+). v2: filterTexts
+      // (batched) reemplaza al per-element filterText. filterImage queda igual.
+      let handler = FilterMessageHandler()
+      config.userContentController.addScriptMessageHandler(
+        handler, contentWorld: .page, name: "filterTexts")
+      config.userContentController.addScriptMessageHandler(
+        handler, contentWorld: .page, name: "filterImage")
+      self.filterHandler = handler
 
       let webView = WKWebView(frame: requested, configuration: config)
       webView.customUserAgent = NativeBrowserPanePlugin.userAgent
@@ -163,6 +308,7 @@ class NativeBrowserPanePlugin: Plugin {
       }
       self.webView = nil
       self.navDelegate = nil
+      self.filterHandler = nil
       invoke.resolve()
     }
   }
@@ -236,6 +382,106 @@ class NativeBrowserPaneNavDelegate: NSObject, WKNavigationDelegate {
       plugin?.trigger("browser-navigated", data: ["url": url])
     }
     decisionHandler(.allow)
+  }
+}
+
+/// Bridge JS → Swift para las dos funciones de filtro. Usa
+/// `WKScriptMessageHandlerWithReply` (iOS 14+) que devuelve Promises a JS.
+///
+/// Implementación con GCD + URLSession completion handler, NO Swift
+/// Concurrency: la combinación `Task { try await URLSession.shared.data(from:) }`
+/// crashea en swift_task_alloc en iOS 17 simulator (EXC_BAD_ACCESS dentro del
+/// runtime de Swift Concurrency cuando el Task se crea desde el callback ObjC
+/// de WKScriptMessageHandler).
+class FilterMessageHandler: NSObject, WKScriptMessageHandlerWithReply {
+  static let ciContext = CIContext(options: nil)
+  static let workQueue = DispatchQueue(
+    label: "com.hackathon404.filter.work", qos: .userInitiated, attributes: .concurrent)
+
+  func userContentController(
+    _ userContentController: WKUserContentController,
+    didReceive message: WKScriptMessage,
+    replyHandler: @escaping (Any?, String?) -> Void
+  ) {
+    switch message.name {
+    case "filterTexts":
+      // El JS hace postMessage(arrayOfStrings) → llega como NSArray<NSString>.
+      let texts = (message.body as? [String]) ?? []
+      FilterMessageHandler.workQueue.async {
+        let out = FilterMessageHandler.filterTexts(texts)
+        replyHandler(out, nil)
+      }
+    case "filterImage":
+      let urlString = (message.body as? String) ?? ""
+      FilterMessageHandler.filterImage(urlString) { out in
+        replyHandler(out, nil)
+      }
+    default:
+      replyHandler(nil, "unknown handler: \(message.name)")
+    }
+  }
+
+  /// Reemplaza ~30% de letras alfabéticas por '-'. Preserva espacios,
+  /// puntuación y dígitos para que la salida se lea como censura intencional.
+  static func filterText(_ text: String) -> String {
+    var out = ""
+    out.reserveCapacity(text.count)
+    for ch in text {
+      if ch.isLetter && Double.random(in: 0..<1) < 0.30 {
+        out.append("-")
+      } else {
+        out.append(ch)
+      }
+    }
+    return out
+  }
+
+  /// Versión batched: filtra todos los textos en una sola llamada para evitar
+  /// 100+ round-trips JS↔Swift por página.
+  static func filterTexts(_ texts: [String]) -> [String] {
+    return texts.map { filterText($0) }
+  }
+
+  /// Baja la imagen, aplica Gaussian blur (CIFilter), encoda como JPEG y
+  /// devuelve el data URL via completion. En caso de error devuelve el URL
+  /// original. Puede invocar `completion` desde cualquier thread; el caller
+  /// (WKScriptMessageHandlerWithReply) acepta replies desde cualquier queue.
+  static func filterImage(_ urlString: String, completion: @escaping (String) -> Void) {
+    guard let url = URL(string: urlString) else {
+      completion(urlString)
+      return
+    }
+    let task = URLSession.shared.dataTask(with: url) { data, _, error in
+      guard let data = data, error == nil else {
+        completion(urlString)
+        return
+      }
+      // Salir del callback del URLSession antes de hacer trabajo CPU pesado:
+      // la queue interna del URLSession es compartida con otros downloads.
+      FilterMessageHandler.workQueue.async {
+        let result = FilterMessageHandler.blurImageData(data) ?? urlString
+        completion(result)
+      }
+    }
+    task.resume()
+  }
+
+  /// Decodifica bytes → CIImage → Gaussian blur → JPEG → data URL.
+  /// Síncrono, llama desde una background queue.
+  private static func blurImageData(_ data: Data) -> String? {
+    guard let inputImage = CIImage(data: data) else { return nil }
+    let blurFilter = CIFilter.gaussianBlur()
+    blurFilter.inputImage = inputImage
+    blurFilter.radius = 15.0
+    guard let outputImage = blurFilter.outputImage else { return nil }
+    // El blur extiende los bounds; recorta al rectángulo original.
+    let cropped = outputImage.cropped(to: inputImage.extent)
+    guard let cgImage = ciContext.createCGImage(cropped, from: inputImage.extent) else {
+      return nil
+    }
+    let uiImage = UIImage(cgImage: cgImage)
+    guard let jpeg = uiImage.jpegData(compressionQuality: 0.75) else { return nil }
+    return "data:image/jpeg;base64,\(jpeg.base64EncodedString())"
   }
 }
 

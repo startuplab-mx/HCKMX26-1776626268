@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "browser-pane",
+  "description": "IPC scope for the embedded browser_pane window: filter_text and filter_image commands invoked by the injected filter.js running in remote page origins.",
+  "windows": ["browser_pane"],
+  "remote": {
+    "urls": ["http://*", "https://*"]
+  },
+  "permissions": [
+    "core:default"
+  ]
+}

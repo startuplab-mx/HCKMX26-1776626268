@@ -158,6 +158,56 @@ async fn set_browser_view_bounds(
     Ok(())
 }
 
+/// Filtra una lista de textos en una sola IPC. Reemplaza ~30% de letras por '-'.
+/// Batched para evitar 100+ invokes por página (uno por <p>/<h1-h6>).
+#[tauri::command]
+async fn filter_texts(texts: Vec<String>) -> Result<Vec<String>, String> {
+    use rand::Rng;
+    let mut rng = rand::thread_rng();
+    let out: Vec<String> = texts
+        .into_iter()
+        .map(|t| {
+            t.chars()
+                .map(|c| {
+                    if c.is_alphabetic() && rng.gen_bool(0.30) {
+                        '-'
+                    } else {
+                        c
+                    }
+                })
+                .collect()
+        })
+        .collect();
+    Ok(out)
+}
+
+/// Aplica blur Gaussiano a los bytes de una imagen y devuelve los bytes JPEG
+/// resultantes via `tauri::ipc::Response` (transporte binario, no JSON / base64).
+/// El JS hace el `fetch(img.src)` localmente (cache hit del browser) y nos pasa
+/// los bytes — eliminamos el segundo network fetch desde Rust.
+#[tauri::command]
+async fn filter_image_bytes(bytes: Vec<u8>) -> Result<tauri::ipc::Response, String> {
+    let blurred = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
+        let img = image::load_from_memory(&bytes).map_err(|e| e.to_string())?;
+        // Downscale agresivo: el CSS aplica un blur de 24px encima hasta que
+        // estos bytes lleguen, así que solo necesitamos algo irreversiblemente
+        // borroso. 128px + sigma 8 es ~25x más barato que 512px + sigma 15.
+        let resized = img.resize(128, 128, image::imageops::FilterType::Triangle);
+        // fast_blur es separable Gaussian — ~5x más rápido que blur full-2D.
+        let blurred = image::imageops::fast_blur(&resized.to_rgba8(), 8.0);
+        let mut out = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(blurred)
+            .to_rgb8()
+            .write_to(&mut out, image::ImageFormat::Jpeg)
+            .map_err(|e| e.to_string())?;
+        Ok(out.into_inner())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    Ok(tauri::ipc::Response::new(blurred))
+}
+
 #[tauri::command]
 async fn close_browser_view(app: AppHandle) -> Result<(), String> {
     #[cfg(desktop)]
@@ -192,7 +242,9 @@ pub fn run() {
             open_browser_view,
             navigate_browser_view,
             set_browser_view_bounds,
-            close_browser_view
+            close_browser_view,
+            filter_texts,
+            filter_image_bytes
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

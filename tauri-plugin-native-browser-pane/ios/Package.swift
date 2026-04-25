@@ -6,7 +6,7 @@ let package = Package(
   name: "tauri-plugin-native-browser-pane",
   platforms: [
     .macOS(.v10_13),
-    .iOS(.v13),
+    .iOS(.v14),
   ],
   products: [
     .library(
