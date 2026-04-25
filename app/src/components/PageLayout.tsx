@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
+import AppShell from "./AppShell";
 
 export default function PageLayout({
   title,
@@ -9,20 +10,20 @@ export default function PageLayout({
   children: React.ReactNode;
 }) {
   return (
-    <main className="min-h-screen px-6 py-8 text-white">
-      <header className="flex items-center gap-4 mb-8">
+    <AppShell>
+      <header className="flex items-center gap-3 mb-4">
         <Link
           to="/"
-          className="w-10 h-10 rounded-full bg-white/20 hover:bg-white/30 transition-colors flex items-center justify-center"
           aria-label="Volver"
+          className="px-3 py-2 rounded-lg bg-white/10 hover:bg-white/20 transition-colors flex items-center justify-center"
         >
-          <ArrowLeft className="w-5 h-5" strokeWidth={2} />
+          <ArrowLeft className="w-4 h-4" strokeWidth={2} />
         </Link>
-        <h1 className="text-2xl font-semibold">{title}</h1>
+        <h1 className="text-xl font-semibold">{title}</h1>
       </header>
-      <section className="rounded-2xl bg-white/10 backdrop-blur-sm p-6">
+      <section className="rounded-2xl bg-white/10 backdrop-blur-sm p-5 flex-1 overflow-auto">
         {children}
       </section>
-    </main>
+    </AppShell>
   );
 }
