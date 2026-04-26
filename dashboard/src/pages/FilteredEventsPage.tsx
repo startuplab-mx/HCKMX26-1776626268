@@ -159,21 +159,48 @@ function Select({
   onChange: (v: string) => void;
   options: { v: string; label: string }[];
 }) {
+  // Chevron SVG inline data URI — color T.text2 (#606060). Apariencia
+  // nativa removida para que el dropdown respete el tema oscuro en todas
+  // las plataformas.
+  const chevron =
+    "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' fill='none' stroke='%23A0A0A0' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/></svg>\")";
   return (
     <select
       value={value}
       onChange={(e) => onChange(e.target.value)}
       style={{
-        background: T.bg3,
+        appearance: "none",
+        WebkitAppearance: "none",
+        MozAppearance: "none",
+        background: `${T.bg3} ${chevron} no-repeat right 10px center`,
         color: T.text0,
         border: `1px solid ${T.border}`,
         borderRadius: 8,
-        padding: "6px 10px",
+        padding: "6px 28px 6px 12px",
         fontSize: 12,
+        fontFamily: "inherit",
+        fontWeight: 500,
+        cursor: "pointer",
+        outline: "none",
+        colorScheme: "dark",
+        minWidth: 110,
+        transition: "border-color 120ms ease, background-color 120ms ease",
+      }}
+      onFocus={(e) => {
+        e.currentTarget.style.borderColor = T.primary;
+      }}
+      onBlur={(e) => {
+        e.currentTarget.style.borderColor = T.border;
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.background = `${T.bg4} ${chevron} no-repeat right 10px center`;
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = `${T.bg3} ${chevron} no-repeat right 10px center`;
       }}
     >
       {options.map((o) => (
-        <option key={o.v} value={o.v}>
+        <option key={o.v} value={o.v} style={{ background: T.bg2, color: T.text0 }}>
           {o.label}
         </option>
       ))}

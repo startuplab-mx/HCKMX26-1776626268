@@ -6,6 +6,7 @@
 //! `dotenvy`); nunca está hardcoded.
 
 use common::{auth_token, server_url, FilterEvent};
+use tauri::{TitleBarStyle, WebviewUrl, WebviewWindowBuilder};
 
 /// Lista los eventos en el server. `since` opcional → polling incremental.
 #[tauri::command]
@@ -54,6 +55,28 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![fetch_events, clear_events])
+        .setup(|app| {
+            // Crea la ventana programáticamente para poder aplicar
+            // `TitleBarStyle::Overlay` en macOS: title bar transparente +
+            // content fills the full window, así el fondo oscuro del
+            // dashboard se extiende hasta el tope y los traffic lights
+            // flotan sobre el header.
+            let mut builder =
+                WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+                    .title("Sentinel")
+                    .inner_size(1200.0, 800.0)
+                    .min_inner_size(900.0, 600.0);
+
+            #[cfg(target_os = "macos")]
+            {
+                builder = builder
+                    .title_bar_style(TitleBarStyle::Overlay)
+                    .hidden_title(true);
+            }
+
+            let _ = builder.build()?;
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

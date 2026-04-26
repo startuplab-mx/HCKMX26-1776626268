@@ -13,6 +13,9 @@ export function PulseDot({ color, size = 10 }: Props) {
         justifyContent: "center",
         width: size,
         height: size,
+        // Deja pasar el click al padre (header drag region) en vez de
+        // capturarlo en estos spans decorativos.
+        pointerEvents: "none",
       }}
     >
       <span

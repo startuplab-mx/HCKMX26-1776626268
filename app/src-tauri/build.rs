@@ -15,6 +15,13 @@ use std::path::{Path, PathBuf};
 
 const ORT_VERSION: &str = "1.22.0";
 
+/// SHA256 esperado del zip publicado por Microsoft para `ORT_VERSION`.
+/// Cuando es `None`, el primer build calcula e imprime el hash via
+/// `cargo:warning=` para que el dev lo pin a esta constante (defensa contra
+/// MITM y corrupción de cache). Tras pinar, builds futuros validan
+/// estrictamente y abortan ante mismatch.
+const ORT_ZIP_SHA256: Option<&str> = None;
+
 fn main() {
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
 
@@ -40,6 +47,8 @@ fn main() {
 // ----------------------------------------------------------------------------
 
 fn setup_ort_ios(manifest: &Path) -> Result<(), String> {
+    println!("cargo:rerun-if-env-changed=SHIELD_ORT_XCFW_PATH");
+
     let target = std::env::var("TARGET").map_err(|e| e.to_string())?;
 
     // Mapping target → (xcframework slice, lipo arch name). El xcframework de
@@ -52,13 +61,30 @@ fn setup_ort_ios(manifest: &Path) -> Result<(), String> {
         other => return Err(format!("target iOS no soportado: {other}")),
     };
 
-    // Vendor location compartida con el Swift package del plugin nativo.
-    let xcfw_root = manifest
-        .join("../../tauri-plugin-native-browser-pane/ios/vendor/onnxruntime.xcframework");
-
-    if !xcfw_root.exists() {
-        download_xcframework(&xcfw_root)?;
-    }
+    // Resolución del xcframework root, en orden de precedencia:
+    //  1. `SHIELD_ORT_XCFW_PATH` env: usa esa ruta tal cual (CI con cache propio,
+    //     dev con copia local). No se toca nada más.
+    //  2. Vendor location en `tauri-plugin-native-browser-pane/ios/vendor/`,
+    //     compartida con el Swift package del plugin. Si no existe, se intenta
+    //     poblar desde caché global (~/Library/Caches/shield/) y, en último
+    //     recurso, descargando desde la CDN de Microsoft con verificación SHA256.
+    let xcfw_root = if let Ok(path) = std::env::var("SHIELD_ORT_XCFW_PATH") {
+        let p = PathBuf::from(&path);
+        if !p.exists() {
+            return Err(format!(
+                "SHIELD_ORT_XCFW_PATH={} no existe",
+                p.display()
+            ));
+        }
+        p
+    } else {
+        let vendor = manifest
+            .join("../../tauri-plugin-native-browser-pane/ios/vendor/onnxruntime.xcframework");
+        if !vendor.exists() {
+            ensure_xcframework(&vendor)?;
+        }
+        vendor
+    };
 
     let src = xcfw_root
         .join(slice)
@@ -99,53 +125,155 @@ fn setup_ort_ios(manifest: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn download_xcframework(dst: &Path) -> Result<(), String> {
+/// Garantiza que `dst` (vendor/onnxruntime.xcframework) exista. Estrategia:
+/// 1. Si la caché global tiene `ort.zip` con el SHA256 esperado, extrae desde
+///    ahí — sin red.
+/// 2. Si no, descarga la CDN, verifica SHA256, y entonces extrae.
+/// La caché es por-versión (`onnxruntime-{ORT_VERSION}/`) y no se borra al
+/// terminar — sirve para cualquier checkout futuro en la misma máquina.
+fn ensure_xcframework(dst: &Path) -> Result<(), String> {
+    let cache_dir = host_cache_dir()?
+        .join("shield")
+        .join(format!("onnxruntime-{ORT_VERSION}"));
+    std::fs::create_dir_all(&cache_dir)
+        .map_err(|e| format!("mkdir cache {}: {e}", cache_dir.display()))?;
+    let zip_path = cache_dir.join("ort.zip");
+
+    // Sólo aceptamos el zip si su hash coincide con el esperado. Sin
+    // `ORT_ZIP_SHA256` pinado, basta con que exista el zip y avisamos al dev.
+    let zip_ok = zip_path.exists() && verify_zip_sha(&zip_path)?;
+    if !zip_ok {
+        let _ = std::fs::remove_file(&zip_path);
+        download_zip(&zip_path)?;
+        if !verify_zip_sha(&zip_path)? {
+            let _ = std::fs::remove_file(&zip_path);
+            return Err("SHA256 mismatch tras descarga (zip corrupto?)".into());
+        }
+    }
+
+    extract_zip_into(&zip_path, dst, &cache_dir)
+}
+
+/// `~/Library/Caches/shield/...` en macOS, `$XDG_CACHE_HOME/shield/...` o
+/// `~/.cache/shield/...` en otros UNIX. iOS host build siempre es macOS, así
+/// que macOS es el path real; los demás existen por completitud.
+fn host_cache_dir() -> Result<PathBuf, String> {
+    if let Ok(xdg) = std::env::var("XDG_CACHE_HOME") {
+        if !xdg.is_empty() {
+            return Ok(PathBuf::from(xdg));
+        }
+    }
+    let home = std::env::var("HOME")
+        .map_err(|_| "HOME no definido (¿build sin shell?)".to_string())?;
+    #[cfg(target_os = "macos")]
+    {
+        Ok(PathBuf::from(home).join("Library/Caches"))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok(PathBuf::from(home).join(".cache"))
+    }
+}
+
+fn download_zip(dst: &Path) -> Result<(), String> {
     let url = format!(
         "https://download.onnxruntime.ai/pod-archive-onnxruntime-c-{ORT_VERSION}.zip"
     );
-    println!("cargo:warning=descargando onnxruntime {ORT_VERSION} (~30 MB)...");
+    println!(
+        "cargo:warning=descargando onnxruntime {ORT_VERSION} (~30 MB) → {}",
+        dst.display()
+    );
+    let status = std::process::Command::new("curl")
+        .arg("-fsSLo")
+        .arg(dst)
+        .arg(&url)
+        .status()
+        .map_err(|e| format!("ejecutar curl: {e}"))?;
+    if !status.success() {
+        let _ = std::fs::remove_file(dst);
+        return Err(format!("curl falló descargando {url}"));
+    }
+    Ok(())
+}
 
+/// `true` si el zip pasa la verificación contra `ORT_ZIP_SHA256`. Si la
+/// constante es `None`, sólo emite un warning con el hash calculado y devuelve
+/// `true` (no bloqueamos primer build cuando aún no hay hash pinado).
+fn verify_zip_sha(zip: &Path) -> Result<bool, String> {
+    let actual = sha256_of_file(zip)?;
+    match ORT_ZIP_SHA256 {
+        Some(expected) => {
+            let expected = expected.trim().to_ascii_lowercase();
+            let actual = actual.to_ascii_lowercase();
+            if expected != actual {
+                println!(
+                    "cargo:warning=SHA256 mismatch para ort.zip: esperado {expected}, \
+                     obtenido {actual} (eliminado, se redescargará)"
+                );
+                return Ok(false);
+            }
+            Ok(true)
+        }
+        None => {
+            println!(
+                "cargo:warning=ORT_ZIP_SHA256 no fijado. SHA256 calculado: {actual} \
+                 (cópialo a app/src-tauri/build.rs:ORT_ZIP_SHA256 para validar \
+                 builds futuros contra MITM y corrupción)"
+            );
+            Ok(true)
+        }
+    }
+}
+
+fn sha256_of_file(path: &Path) -> Result<String, String> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    let mut f = std::fs::File::open(path)
+        .map_err(|e| format!("open {}: {e}", path.display()))?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = f.read(&mut buf).map_err(|e| format!("read: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hex::encode(hasher.finalize()))
+}
+
+fn extract_zip_into(zip: &Path, dst: &Path, work_dir: &Path) -> Result<(), String> {
     let parent = dst
         .parent()
         .ok_or_else(|| format!("xcfw destino sin parent: {}", dst.display()))?;
     std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
 
-    let tmp_dir = parent.join(".onnxruntime-download.tmp");
-    let _ = std::fs::remove_dir_all(&tmp_dir);
-    std::fs::create_dir_all(&tmp_dir).map_err(|e| format!("mkdir tmp: {e}"))?;
-    let zip_path = tmp_dir.join("ort.zip");
-
-    let curl = std::process::Command::new("curl")
-        .arg("-fsSLo")
-        .arg(&zip_path)
-        .arg(&url)
-        .status()
-        .map_err(|e| format!("ejecutar curl: {e}"))?;
-    if !curl.success() {
-        return Err(format!("curl falló descargando {url}"));
-    }
+    let tmp = work_dir.join(".extract.tmp");
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).map_err(|e| format!("mkdir extract tmp: {e}"))?;
 
     let unzip = std::process::Command::new("unzip")
         .arg("-q")
-        .arg(&zip_path)
+        .arg(zip)
         .arg("-d")
-        .arg(&tmp_dir)
+        .arg(&tmp)
         .status()
         .map_err(|e| format!("ejecutar unzip: {e}"))?;
     if !unzip.success() {
         return Err("unzip falló".into());
     }
 
-    let extracted = tmp_dir.join("onnxruntime.xcframework");
+    let extracted = tmp.join("onnxruntime.xcframework");
     if !extracted.exists() {
         return Err(format!(
             "xcframework no encontrado tras unzip en {}",
             extracted.display()
         ));
     }
+    let _ = std::fs::remove_dir_all(dst);
     std::fs::rename(&extracted, dst)
         .map_err(|e| format!("rename {} → {}: {e}", extracted.display(), dst.display()))?;
-    let _ = std::fs::remove_dir_all(&tmp_dir);
+    let _ = std::fs::remove_dir_all(&tmp);
     Ok(())
 }
 
