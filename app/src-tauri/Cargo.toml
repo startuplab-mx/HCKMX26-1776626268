@@ -16,6 +16,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+serde_json = "1"
 
 [dependencies]
 tauri = { version = "2", features = [] }
@@ -30,3 +31,7 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png",
 base64 = "0.22"
 rand = "0.8"
 tauri-plugin-native-browser-pane = { path = "../../tauri-plugin-native-browser-pane" }
+
+# Shared classifier crate (ort + tokenizers + lexical + multi-label decision).
+classifier-core = { path = "../../crates/classifier-core" }
+anyhow = "1.0"

@@ -1,0 +1,25 @@
+[package]
+name = "classifier-core"
+version = "0.1.0"
+edition = "2021"
+description = "Zero-shot multi-hypothesis NLI classifier (shared core for app + plugin)"
+
+[dependencies]
+tokenizers = "0.20"
+ndarray = "0.16"
+aho-corasick = "1.1"
+regex = "1.10"
+deunicode = "1.6"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+anyhow = "1.0"
+
+# Desktop: ort downloads onnxruntime via download-binaries.
+[target.'cfg(not(any(target_os = "ios", target_os = "android")))'.dependencies]
+ort = { version = "=2.0.0-rc.10", default-features = false, features = ["std", "ndarray", "download-binaries"] }
+
+# Mobile: ort static-links contra libonnxruntime.a. ORT_LIB_LOCATION debe estar
+# seteado al invocar cargo (lo hace el shellScript del pbxproj de iOS, ver
+# scripts/patch-pbxproj.py + scripts/setup-ort-ios.sh).
+[target.'cfg(any(target_os = "ios", target_os = "android"))'.dependencies]
+ort = { version = "=2.0.0-rc.10", default-features = false, features = ["std", "ndarray"] }

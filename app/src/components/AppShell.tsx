@@ -46,6 +46,27 @@ export default function AppShell({
     setIsAndroid(detectIsAndroid());
   }, []);
 
+  // Pin to the visual viewport so the on-screen keyboard can't push the
+  // layout up and overlap the notch. When the keyboard opens, vv.height
+  // shrinks → AppShell shrinks → flex-1 children (e.g. textarea) shrink,
+  // so the focused input stays visible without iOS having to auto-scroll.
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const update = () => {
+      const root = document.documentElement;
+      root.style.setProperty("--vvh", `${vv.height}px`);
+      root.style.setProperty("--vvtop", `${vv.offsetTop}px`);
+    };
+    vv.addEventListener("resize", update);
+    vv.addEventListener("scroll", update);
+    update();
+    return () => {
+      vv.removeEventListener("resize", update);
+      vv.removeEventListener("scroll", update);
+    };
+  }, []);
+
   const padding: Padding = isAndroid
     ? ANDROID
     : {
@@ -55,8 +76,13 @@ export default function AppShell({
 
   return (
     <main
-      className={`h-dvh flex flex-col text-white ${className}`}
+      className={`flex flex-col text-white ${className}`}
       style={{
+        position: "fixed",
+        top: "var(--vvtop, 0px)",
+        left: 0,
+        width: "100%",
+        height: "var(--vvh, 100dvh)",
         paddingTop: padding.top,
         paddingBottom: padding.bottom,
         paddingLeft: padding.left,

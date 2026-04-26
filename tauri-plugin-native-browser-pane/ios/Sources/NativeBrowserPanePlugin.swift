@@ -10,6 +10,13 @@ import Tauri
 import UIKit
 import WebKit
 
+// Rust FFI: clasifica un batch de textos vía el modelo zero-shot multi-hipótesis.
+// Implementado en `tauri-plugin-native-browser-pane/src/ios_filter.rs`.
+// Recibe el path del Bundle (donde viven runtime.json + onnx_model/) y un JSON
+// array de strings; devuelve un JSON array de strings filtrados.
+@_silgen_name("classifier_filter_texts")
+func classifier_filter_texts(_ bundlePath: SRString, _ textsJson: SRString) -> SRString
+
 class OpenArgs: Decodable {
   let url: String
   let x: Double
@@ -469,25 +476,29 @@ class FilterMessageHandler: NSObject, WKScriptMessageHandlerWithReply {
     }
   }
 
-  /// Reemplaza ~30% de letras alfabéticas por '-'. Preserva espacios,
-  /// puntuación y dígitos para que la salida se lea como censura intencional.
-  static func filterText(_ text: String) -> String {
-    var out = ""
-    out.reserveCapacity(text.count)
-    for ch in text {
-      if ch.isLetter && Double.random(in: 0..<1) < 0.30 {
-        out.append("-")
-      } else {
-        out.append(ch)
-      }
-    }
-    return out
-  }
-
-  /// Versión batched: filtra todos los textos en una sola llamada para evitar
-  /// 100+ round-trips JS↔Swift por página.
+  /// Versión batched: delega al classifier zero-shot (Rust) vía FFI swift-rs.
+  /// JSON encode/decode evita la limitación de SRArray no-construible.
+  /// Si el modelo no está cargado en Rust, la función Rust devuelve los textos
+  /// sin cambios, así que esto es seguro como passthrough.
   static func filterTexts(_ texts: [String]) -> [String] {
-    return texts.map { filterText($0) }
+    let bundlePath = Bundle.main.resourcePath ?? ""
+    guard
+      let inputData = try? JSONSerialization.data(withJSONObject: texts),
+      let inputJson = String(data: inputData, encoding: .utf8)
+    else {
+      return texts
+    }
+
+    let resultSR = classifier_filter_texts(SRString(bundlePath), SRString(inputJson))
+    let resultStr = resultSR.toString()
+
+    guard
+      let resultData = resultStr.data(using: .utf8),
+      let resultArr = try? JSONSerialization.jsonObject(with: resultData) as? [String]
+    else {
+      return texts
+    }
+    return resultArr
   }
 
   /// Baja la imagen, aplica Gaussian blur (CIFilter), encoda como JPEG y

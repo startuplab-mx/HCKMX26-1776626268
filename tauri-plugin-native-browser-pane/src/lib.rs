@@ -3,6 +3,13 @@
 //!
 //! En iOS, registra `NativeBrowserPanePlugin.swift`. En desktop es no-op (el
 //! wiring desktop usa `WebviewWindow` directamente desde el código de la app).
+//!
+//! Además, expone vía FFI (swift-rs) un filtro batched de textos que el
+//! `FilterMessageHandler` Swift llama para reemplazar el random replacement
+//! por la decisión del classifier zero-shot multi-hipótesis.
+
+#[cfg(target_os = "ios")]
+mod ios_filter;
 
 use tauri::plugin::{Builder, TauriPlugin};
 use tauri::{Manager, Runtime};

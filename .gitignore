@@ -119,6 +119,17 @@ venv.bak/
 # ---- mkdocs ----
 /site
 
+# ---- ML resources (auto-populated by build.rs) ----
+app/src-tauri/resources/onnx_model/
+# runtime.json contiene las hipótesis sensibles (OPSEC)
+app/src-tauri/resources/runtime.json
+# ort static lib path varies per machine (see scripts/setup.sh)
+app/src-tauri/.ort_link/
+# .cargo/config.toml is generated with absolute paths by scripts/setup.sh
+.cargo/config.toml
+# Vendored xcframework
+tauri-plugin-native-browser-pane/ios/vendor/onnxruntime.xcframework/
+
 # ---- IDEs / Editors ----
 .idea/
 .vscode/
@@ -204,3 +215,5 @@ tmp/
 *.pdf
 build/
 .tectonic-cache/
+
+onnx_model

@@ -1,0 +1,214 @@
+{
+  "category_keys": [
+    "cat_a",
+    "cat_b",
+    "cat_c"
+  ],
+  "context_test_cases": [
+    {
+      "expected": "cat_a",
+      "messages": [
+        "Hola, vi tu post en facebook",
+        "se busca gente entrona, paga semanal",
+        "no se necesita experiencia",
+        "¿están contratando?"
+      ]
+    },
+    {
+      "expected": null,
+      "messages": [
+        "Buen día, vi su anuncio en LinkedIn",
+        "tienen vacantes para ventas",
+        "tengo 5 años de experiencia en retail",
+        "¿están contratando?"
+      ]
+    },
+    {
+      "expected": "cat_c",
+      "messages": [
+        "Hola, ya sabemos dónde estudia tu hija",
+        "tenemos sus fotos",
+        "más vale que cooperes con lo que pedimos"
+      ]
+    },
+    {
+      "expected": null,
+      "messages": [
+        "wey ya viste a mi mamá",
+        "le organicé un cumple sorpresa",
+        "necesito juntar pa el pastel",
+        "¿me deposites lo del cumpleaños cuando puedas?"
+      ]
+    }
+  ],
+  "hypotheses": {
+    "cat_a": [
+      "Este mensaje ofrece trabajo en una organización criminal o cártel, con paga semanal en efectivo, sin contrato formal, dirigido a jóvenes sin experiencia",
+      "Este mensaje invita a unirse a un grupo criminal o a trabajar para un cártel",
+      "Este mensaje menciona cárteles mexicanos, narcos, sicarios o lenguaje codificado de la maña",
+      "Este mensaje pide contactar por WhatsApp o Telegram para una oferta laboral sospechosa dirigida a menores"
+    ],
+    "cat_b": [
+      "Este mensaje contiene halagos románticos o sexuales explícitamente dirigidos a un niño, niña o adolescente",
+      "Este mensaje pide secreto a un niño o le dice que no cuente a sus padres",
+      "Este mensaje le pide a un niño, niña o adolescente que envíe fotos o videos íntimos o sexuales",
+      "Este mensaje le ofrece a un niño o adolescente dinero, regalos, recargas o saldo a cambio de fotos íntimas, encuentros o silencio sobre la conversación"
+    ],
+    "cat_c": [
+      "Este mensaje contiene amenazas de daño físico o de revelar información privada",
+      "Este mensaje exige dinero bajo coacción o intimidación",
+      "Este mensaje afirma conocer datos personales de la víctima o de su familia para amenazar"
+    ]
+  },
+  "lexical": {
+    "cat_a": {
+      "emojis": [
+        "🐓",
+        "🆖",
+        "4️⃣",
+        "🎖️"
+      ],
+      "frases": [
+        "se busca gente",
+        "se recluta",
+        "buena paga semanal",
+        "hospedaje y comida",
+        "no se necesita experiencia",
+        "trabajo para morros",
+        "buen jale",
+        "jale seguro",
+        "info al inbox",
+        "info al wpp",
+        "info por dm",
+        "billete fácil",
+        "casa, comida y sueldo",
+        "viajes pagados",
+        "necesito gente entrona",
+        "trabajo para la maña",
+        "puro mz",
+        "puro cjng",
+        "las cuatro letras"
+      ],
+      "hashtags": [
+        "#4letras",
+        "#mencho",
+        "#nuevageneracion",
+        "#trabajoparalamaña",
+        "#chapiza",
+        "#gentedelmz",
+        "#belicones",
+        "#purosinaloa"
+      ],
+      "regex": "\\$?\\s?\\d{1,3}[.,]?\\d{3}\\s?(semanal|por semana|a la semana|sem|sem\\.)"
+    },
+    "cat_b": {
+      "frases": [
+        "no le digas a tus papás",
+        "es nuestro secreto",
+        "borra los mensajes",
+        "mándame foto",
+        "qué traes puesto",
+        "estás solo",
+        "estás sola",
+        "te mando recarga",
+        "eres muy madura para tu edad",
+        "eres muy maduro",
+        "cuántos años tienes",
+        "qué edad tienes",
+        "fotos en ropa interior",
+        "no le digas a nadie",
+        "nadie te entiende como yo"
+      ]
+    },
+    "cat_c": {
+      "frases": [
+        "ya sabemos dónde vives",
+        "ya sabemos dónde estudia",
+        "te andan buscando",
+        "tengo tus fotos",
+        "voy a publicar",
+        "deposita",
+        "transfiere",
+        "no te metas en lo que no",
+        "te van a poner el dedo",
+        "ya tenemos tu dirección"
+      ]
+    }
+  },
+  "lexical_boost_floor": 0.7,
+  "lexical_shortcut_score": 0.95,
+  "max_context": 4,
+  "model_id": "MoritzLaurer/multilingual-MiniLMv2-L6-mnli-xnli",
+  "neutral_hypothesis": "Este mensaje es una conversación cotidiana e inofensiva entre familiares, amigos, compañeros de trabajo, vendedores o desconocidos sobre temas comunes como trabajo legítimo, dinero entre conocidos, salud, comida, planes, estudios o consejos.",
+  "test_cases": [
+    {
+      "expected": "cat_a",
+      "text": "Se busca gente entrona, buen jale, info al inbox"
+    },
+    {
+      "expected": "cat_a",
+      "text": "Buscamos chavos con ganas, pago semanal alto, sin requisitos previos"
+    },
+    {
+      "expected": "cat_a",
+      "text": "Necesito morros con ganas de chambear, paga $15,000 semanal, hospedaje incluido"
+    },
+    {
+      "expected": "cat_a",
+      "text": "Trabajo seguro al norte, viajes pagados, info por DM, no se necesita experiencia"
+    },
+    {
+      "expected": "cat_b",
+      "text": "Eres muy madura para tu edad, no le digas a tus papás"
+    },
+    {
+      "expected": "cat_b",
+      "text": "Eres especial para mí, ¿podemos chatear sin que nadie se entere?"
+    },
+    {
+      "expected": "cat_b",
+      "text": "Hola linda, qué edad tienes? mándame una foto sin filtro"
+    },
+    {
+      "expected": "cat_b",
+      "text": "Si me mandas fotos en ropa interior te paso recarga, pero borra los mensajes después"
+    },
+    {
+      "expected": "cat_c",
+      "text": "Ya sabemos dónde vives, deposita o tengo tus fotos"
+    },
+    {
+      "expected": "cat_c",
+      "text": "Si no transfieres antes de mañana voy a publicar tus fotos íntimas"
+    },
+    {
+      "expected": "cat_c",
+      "text": "Tenemos los datos de tu mamá, más vale que cooperes con lo que te pedimos"
+    },
+    {
+      "expected": null,
+      "text": "No mames wey, qué chamba tan buena, ya estoy ganando bien"
+    },
+    {
+      "expected": null,
+      "text": "Hola hijo, ¿ya hiciste la tarea? No olvides cenar antes de dormir"
+    },
+    {
+      "expected": null,
+      "text": "Buenas tardes, ¿están contratando? Tengo experiencia en ventas"
+    },
+    {
+      "expected": null,
+      "text": "Mi novia es muy madura para su edad, me encanta hablar con ella de filosofía"
+    },
+    {
+      "expected": null,
+      "text": "¿Me deposites lo del cumpleaños cuando puedas? gracias hermano"
+    }
+  ],
+  "thresholds": {
+    "cat_a": 0.75,
+    "cat_b": 0.55,
+    "cat_c": 0.7
+  }
+}
