@@ -22,11 +22,27 @@
   try {
     var pre = document.createElement("style");
     pre.id = "__sandbox_pre";
+    // Selectores compuestos: el bloque queda transparente sólo mientras
+    // NO esté ya filtrado (`__sb_done`) ni en estado skeleton (`__sb_skel`).
+    // Cuando un text node se manda al clasificador, su ancestro p/h gana
+    // `__sb_skel` y deja de aplicarle la regla `transparent` para que el
+    // usuario vea los `-` que sustituyen al texto pendiente.
     pre.textContent =
-      "p:not(.__sb_done),h1:not(.__sb_done),h2:not(.__sb_done)," +
-      "h3:not(.__sb_done),h4:not(.__sb_done),h5:not(.__sb_done)," +
-      "h6:not(.__sb_done){color:transparent !important;text-shadow:none !important;}" +
-      "img:not(.__sb_done){filter:blur(24px) !important;}";
+      "p:not(.__sb_done):not(.__sb_skel),h1:not(.__sb_done):not(.__sb_skel)," +
+      "h2:not(.__sb_done):not(.__sb_skel),h3:not(.__sb_done):not(.__sb_skel)," +
+      "h4:not(.__sb_done):not(.__sb_skel),h5:not(.__sb_done):not(.__sb_skel)," +
+      "h6:not(.__sb_done):not(.__sb_skel){color:transparent !important;text-shadow:none !important;}" +
+      "p.__sb_skel,h1.__sb_skel,h2.__sb_skel,h3.__sb_skel,h4.__sb_skel," +
+      "h5.__sb_skel,h6.__sb_skel{color:rgba(120,120,120,0.55) !important;text-shadow:none !important;}" +
+      "img:not(.__sb_done){filter:blur(24px) !important;}" +
+      "#__sb_loader{position:fixed;inset:0;background:rgba(15,15,25,0.92);" +
+      "display:flex;align-items:center;justify-content:center;flex-direction:column;" +
+      "gap:14px;z-index:2147483646;color:#fff;font:500 15px -apple-system,system-ui,sans-serif;" +
+      "transition:opacity 250ms ease;}" +
+      "#__sb_loader.__hide{opacity:0;pointer-events:none;}" +
+      "#__sb_spin{width:42px;height:42px;border:4px solid rgba(255,255,255,0.2);" +
+      "border-top-color:#fff;border-radius:50%;animation:__sb_spin 0.8s linear infinite;}" +
+      "@keyframes __sb_spin{to{transform:rotate(360deg)}}";
     (document.head || document.documentElement).appendChild(pre);
   } catch (_) {}
 
@@ -85,38 +101,113 @@
 
   if (!checkUrl()) return;
 
+  // ---------- 2.5 Loader overlay + skeleton text ----------
+  // El loader cubre toda la WebView mientras se procesa el primer chunk de
+  // textos. Se quita en el primer batch resuelto (éxito o error). Mientras
+  // tanto, los nodos pendientes muestran sus letras/dígitos sustituidos por
+  // `-` para que jamás se exponga texto sin clasificar.
+  var loaderHidden = false;
+
+  function ensureLoader() {
+    if (loaderHidden) return;
+    if (document.getElementById("__sb_loader")) return;
+    var b = document.body || document.documentElement;
+    if (!b) return; // todavía no hay DOM; se reintenta en runScan()
+    try {
+      var el = document.createElement("div");
+      el.id = "__sb_loader";
+      el.innerHTML =
+        '<div id="__sb_spin" aria-hidden="true"></div>' +
+        '<div>Filtrando contenido…</div>';
+      b.appendChild(el);
+    } catch (_) {}
+  }
+
+  function hideLoader() {
+    if (loaderHidden) return;
+    loaderHidden = true;
+    var el = document.getElementById("__sb_loader");
+    if (!el) return;
+    try { el.classList.add("__hide"); } catch (_) {}
+    // Remover del DOM tras la transición — un MutationObserver del sitio
+    // podría reaccionar al nodo huérfano y queremos cerrar el loop.
+    setTimeout(function () {
+      try { el.parentNode && el.parentNode.removeChild(el); } catch (_) {}
+    }, 300);
+  }
+
+  // Reemplaza letras (\p{L}) y dígitos (\p{N}) por '-'. Espacios y puntuación
+  // se preservan para mantener la silueta visual del texto pendiente.
+  var SKEL_RE;
+  try { SKEL_RE = new RegExp("[\\p{L}\\p{N}]", "gu"); }
+  catch (_) { SKEL_RE = /[A-Za-z0-9À-ɏ]/g; }
+  function skeletonize(s) {
+    try { return s.replace(SKEL_RE, "-"); }
+    catch (_) { return s; }
+  }
+
+  // Sube al primer ancestor p/h1-h6 (los mismos que cubre el pre-hide CSS) y
+  // le añade `__sb_skel`. Eso libera la regla `transparent` y permite que el
+  // skeleton se vea en gris dim.
+  function markSkel(node) {
+    var p = node.parentNode;
+    while (p && p.nodeType === 1) {
+      var t = p.tagName;
+      if (t === "P" || (t && t.length === 2 && t.charAt(0) === "H" &&
+          t.charAt(1) >= "1" && t.charAt(1) <= "6")) {
+        try { p.classList.add("__sb_skel"); } catch (_) {}
+        return;
+      }
+      if (t === "BODY") return;
+      p = p.parentNode;
+    }
+  }
+
   // ---------- 3. Bridges multiplataforma ----------
 
   // TEXTO BATCHED — desktop: invoke nativo con items{text,coords}+pageUrl.
   // Mobile: bridge nativo (filterTexts) sigue con array de strings, sin
   // coordenadas, hasta que se implemente el reporte de eventos en mobile.
+  // Timeout duro: si el clasificador cuelga (rara vez, pero CoreML EP
+  // puede recompilar minutos en device), pasamos en passthrough silencioso
+  // para no dejar el spinner pegado y permitir que el catch del chunk loop
+  // restaure los nodos a su texto original.
+  var FILTER_TIMEOUT_MS = 7000;
   function callFilterTexts(items, pageUrl) {
     var texts = items.map(function (it) { return it.text; });
+    var underlying;
     try {
       if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {
-        return window.__TAURI_INTERNALS__.invoke("filter_texts", {
+        underlying = window.__TAURI_INTERNALS__.invoke("filter_texts", {
           items: items,
           pageUrl: pageUrl,
         });
-      }
-      if (
+      } else if (
         window.webkit &&
         window.webkit.messageHandlers &&
         window.webkit.messageHandlers.filterTexts
       ) {
         // iOS WKScriptMessageHandlerWithReply — el handler nativo procesa el
         // array completo y devuelve [String].
-        return window.webkit.messageHandlers.filterTexts.postMessage(texts);
-      }
-      if (window.FilterBridge && window.FilterBridge.filterTexts) {
-        return new Promise(function (resolve) {
+        underlying = window.webkit.messageHandlers.filterTexts.postMessage(texts);
+      } else if (window.FilterBridge && window.FilterBridge.filterTexts) {
+        underlying = new Promise(function (resolve) {
           var id = "ts" + Date.now() + "_" + Math.random().toString(36).slice(2);
           (window.__filterCb = window.__filterCb || {})[id] = resolve;
           window.FilterBridge.filterTexts(id, JSON.stringify(texts));
         });
+      } else {
+        return Promise.resolve(texts.slice());
       }
-    } catch (_) {}
-    return Promise.resolve(texts.slice());
+    } catch (_) {
+      return Promise.resolve(texts.slice());
+    }
+    return Promise.race([
+      underlying,
+      new Promise(function (resolve) {
+        setTimeout(function () { resolve(texts.slice()); }, FILTER_TIMEOUT_MS);
+      }),
+    ]);
   }
 
   // IMAGEN URL — fallback mobile (CIFilter en iOS, heavyBlur en Android).
@@ -203,7 +294,13 @@
   }
 
   // ---------- 5. Procesamiento de imagen ----------
-  function reveal(el) { el.classList.add("__sb_done"); }
+  // reveal() también limpia `__sb_skel` por si algún elemento llega aquí
+  // sin pasar por revealAncestorBlock (p.ej. el barrido final del scan que
+  // levanta p/h sin candidatos textuales).
+  function reveal(el) {
+    try { el.classList.remove("__sb_skel"); } catch (_) {}
+    el.classList.add("__sb_done");
+  }
 
   // Path desktop: fetch del browser (cache hit) → bytes raw → invoke binario →
   // bytes blurred → blob URL. Manda coords + URL para reportar el evento al
@@ -435,6 +532,9 @@
 
     if (candidates.length === 0) {
       for (var i = 0; i < revealEls.length; i++) reveal(revealEls[i]);
+      // Página sin texto sustancial (about:blank, login pages, etc.): no hay
+      // razón para seguir mostrando el loader.
+      hideLoader();
       return;
     }
 
@@ -450,6 +550,10 @@
         var tag = p.tagName;
         if (tag === "P" || (tag && tag.length === 2 && tag.charAt(0) === "H" &&
             tag.charAt(1) >= "1" && tag.charAt(1) <= "6")) {
+          // Quitar el estado skeleton además de marcar `__sb_done` — sin
+          // esto los `-` quedarían en gris dim aunque ya estén reemplazados
+          // por el resultado del clasificador.
+          try { p.classList.remove("__sb_skel"); } catch (_) {}
           reveal(p);
           return;
         }
@@ -458,14 +562,31 @@
       }
     }
 
+    // Skeletonizar TODOS los candidatos antes de mandarlos al backend.
+    // El usuario ve la silueta del texto en `-` desde ahora — jamás el
+    // texto original sin pasar por el clasificador. El nodeValue real
+    // queda guardado en `__sb_orig` (propiedad expando del Text node, GC
+    // safe) para poder restaurar en error o al asignar el resultado.
+    for (var sk = 0; sk < candidates.length; sk++) {
+      try {
+        candidates[sk].__sb_orig = candidates[sk].nodeValue;
+        candidates[sk].nodeValue = skeletonize(candidates[sk].nodeValue);
+        markSkel(candidates[sk]);
+      } catch (_) {}
+    }
+
+    var firstChunkResolved = false;
     for (var start = 0; start < candidates.length; start += STREAM_CHUNK) {
       var slice = candidates.slice(start, start + STREAM_CHUNK);
       var sliceTexts = [];
       var sliceItems = [];
       for (var c = 0; c < slice.length; c++) {
-        sliceTexts.push(slice[c].nodeValue);
+        // El nodeValue actual ya es skeleton; mandamos el original
+        // anotado en __sb_orig para que el clasificador vea texto real.
+        var orig = slice[c].__sb_orig != null ? slice[c].__sb_orig : slice[c].nodeValue;
+        sliceTexts.push(orig);
         sliceItems.push({
-          text: slice[c].nodeValue,
+          text: orig,
           coords: textNodeCoords(slice[c]),
         });
       }
@@ -477,11 +598,24 @@
           try { slice[k].nodeValue = v; } catch (_) {}
           processedTextNodes.add(slice[k]);
           // Revelar el bloque padre apenas tenemos su texto filtrado, en vez
-          // de esperar al final del scan completo.
+          // de esperar al final del scan completo. revealAncestorBlock
+          // también limpia `__sb_skel`.
           revealAncestorBlock(slice[k]);
         }
+        if (!firstChunkResolved) {
+          firstChunkResolved = true;
+          hideLoader();
+        }
       } catch (_) {
-        for (var m = 0; m < slice.length; m++) processedTextNodes.add(slice[m]);
+        // Restaurar el texto original — el clasificador falló pero seguimos
+        // política conservadora (mejor el texto bruto que dejar bloques en
+        // `-` permanente y un loader infinito). El reveal limpia __sb_skel.
+        for (var m = 0; m < slice.length; m++) {
+          try { slice[m].nodeValue = sliceTexts[m]; } catch (_) {}
+          processedTextNodes.add(slice[m]);
+          revealAncestorBlock(slice[m]);
+        }
+        hideLoader();
       }
     }
     // Limpieza final: cualquier p/h1-h6 que no haya tenido text node candidato
@@ -511,6 +645,11 @@
     scanTimer = null;
     scanRunning = true;
     scanDirty = false;
+    // Reasegurar el loader antes de cada scan: si un MutationObserver del
+    // sitio destruyó el div o si el primer scan corrió antes de tener body,
+    // este es nuestro segundo intento. Es no-op si ya está visible o ya
+    // se ocultó (loaderHidden=true es sticky).
+    ensureLoader();
     try {
       await scanRoot(document.body || document.documentElement);
     } catch (_) {
@@ -532,6 +671,10 @@
   function onReady() {
     if (!checkText()) return;
 
+    // Mostrar el loader lo antes posible — antes de agendar el primer scan,
+    // antes incluso de que el clasificador haga su primer roundtrip. Aquí ya
+    // existe document.body por DOMContentLoaded.
+    ensureLoader();
     scheduleScan();
 
     try {

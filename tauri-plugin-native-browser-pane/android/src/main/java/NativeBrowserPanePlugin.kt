@@ -77,10 +77,21 @@ class NativeBrowserPanePlugin(private val activity: Activity) : Plugin(activity)
             var pre = document.createElement('style');
             pre.id = '__sandbox_pre';
             pre.textContent =
-              "p:not(.__sb_done),h1:not(.__sb_done),h2:not(.__sb_done)," +
-              "h3:not(.__sb_done),h4:not(.__sb_done),h5:not(.__sb_done)," +
-              "h6:not(.__sb_done){color:transparent !important;text-shadow:none !important;}" +
-              "img:not(.__sb_done){filter:blur(24px) !important;}";
+              "p:not(.__sb_done):not(.__sb_skel),h1:not(.__sb_done):not(.__sb_skel)," +
+              "h2:not(.__sb_done):not(.__sb_skel),h3:not(.__sb_done):not(.__sb_skel)," +
+              "h4:not(.__sb_done):not(.__sb_skel),h5:not(.__sb_done):not(.__sb_skel)," +
+              "h6:not(.__sb_done):not(.__sb_skel){color:transparent !important;text-shadow:none !important;}" +
+              "p.__sb_skel,h1.__sb_skel,h2.__sb_skel,h3.__sb_skel,h4.__sb_skel," +
+              "h5.__sb_skel,h6.__sb_skel{color:rgba(120,120,120,0.55) !important;text-shadow:none !important;}" +
+              "img:not(.__sb_done){filter:blur(24px) !important;}" +
+              "#__sb_loader{position:fixed;inset:0;background:rgba(15,15,25,0.92);" +
+              "display:flex;align-items:center;justify-content:center;flex-direction:column;" +
+              "gap:14px;z-index:2147483646;color:#fff;font:500 15px sans-serif;" +
+              "transition:opacity 250ms ease;}" +
+              "#__sb_loader.__hide{opacity:0;pointer-events:none;}" +
+              "#__sb_spin{width:42px;height:42px;border:4px solid rgba(255,255,255,0.2);" +
+              "border-top-color:#fff;border-radius:50%;animation:__sb_spin 0.8s linear infinite;}" +
+              "@keyframes __sb_spin{to{transform:rotate(360deg)}}";
             (document.head || document.documentElement).appendChild(pre);
           } catch (_) {}
 
@@ -113,18 +124,77 @@ class NativeBrowserPanePlugin(private val activity: Activity) : Plugin(activity)
           }
           if (!checkUrl()) return;
 
+          // Loader overlay + skeleton text. Mismo contrato que filter.js
+          // (desktop) y filterScript (iOS). El usuario ve un spinner mientras
+          // corre el primer batch del FilterBridge; los textos pendientes se
+          // ven como `-` (skeleton) hasta que el bridge devuelva la decisión.
+          var loaderHidden = false;
+          function ensureLoader() {
+            if (loaderHidden) return;
+            if (document.getElementById('__sb_loader')) return;
+            var b = document.body || document.documentElement;
+            if (!b) return;
+            try {
+              var el = document.createElement('div');
+              el.id = '__sb_loader';
+              el.innerHTML = '<div id="__sb_spin" aria-hidden="true"></div><div>Filtrando contenido…</div>';
+              b.appendChild(el);
+            } catch (_) {}
+          }
+          function hideLoader() {
+            if (loaderHidden) return;
+            loaderHidden = true;
+            var el = document.getElementById('__sb_loader');
+            if (!el) return;
+            try { el.classList.add('__hide'); } catch (_) {}
+            setTimeout(function () {
+              try { el.parentNode && el.parentNode.removeChild(el); } catch (_) {}
+            }, 300);
+          }
+          var SKEL_RE;
+          try { SKEL_RE = new RegExp('[\\p{L}\\p{N}]', 'gu'); }
+          catch (_) { SKEL_RE = /[A-Za-z0-9À-ɏ]/g; }
+          function skeletonize(s) {
+            try { return s.replace(SKEL_RE, '-'); } catch (_) { return s; }
+          }
+          function markSkel(node) {
+            var p = node.parentNode;
+            while (p && p.nodeType === 1) {
+              var t = p.tagName;
+              if (t === 'P' || (t && t.length === 2 && t.charAt(0) === 'H' &&
+                  t.charAt(1) >= '1' && t.charAt(1) <= '6')) {
+                try { p.classList.add('__sb_skel'); } catch (_) {}
+                return;
+              }
+              if (t === 'BODY') return;
+              p = p.parentNode;
+            }
+          }
+
           window.__filterCb = window.__filterCb || {};
+          // Timeout duro para que un cuelgue del FilterBridge no deje el
+          // loader pegado. Tras 7s pasa a passthrough y el catch de scanRoot
+          // restaura el texto original.
+          var FILTER_TIMEOUT_MS = 7000;
           function callFilterTexts(texts) {
+            var underlying;
             try {
               if (window.FilterBridge && window.FilterBridge.filterTexts) {
-                return new Promise(function (resolve) {
+                underlying = new Promise(function (resolve) {
                   var id = 'ts' + Date.now() + '_' + Math.random().toString(36).slice(2);
                   window.__filterCb[id] = resolve;
                   window.FilterBridge.filterTexts(id, JSON.stringify(texts));
                 });
+              } else {
+                return Promise.resolve(texts.slice());
               }
-            } catch (_) {}
-            return Promise.resolve(texts.slice());
+            } catch (_) { return Promise.resolve(texts.slice()); }
+            return Promise.race([
+              underlying,
+              new Promise(function (resolve) {
+                setTimeout(function () { resolve(texts.slice()); }, FILTER_TIMEOUT_MS);
+              }),
+            ]);
           }
           function callFilterImage(url) {
             try {
@@ -153,7 +223,10 @@ class NativeBrowserPanePlugin(private val activity: Activity) : Plugin(activity)
             return imageCache[url];
           }
 
-          function reveal(el) { el.classList.add('__sb_done'); }
+          function reveal(el) {
+            try { el.classList.remove('__sb_skel'); } catch (_) {}
+            el.classList.add('__sb_done');
+          }
           function processImg(img) {
             if (!img || img.classList.contains('__sb_done')) return;
             var src = img.currentSrc || img.src || '';
@@ -241,10 +314,21 @@ class NativeBrowserPanePlugin(private val activity: Activity) : Plugin(activity)
             } catch (_) {}
             if (candidates.length === 0) {
               for (var i = 0; i < revealEls.length; i++) reveal(revealEls[i]);
+              hideLoader();
               return;
             }
+            // Skeletonizar candidatos antes del bridge: jamás mostramos el
+            // texto sin pasar por el filtro. __sb_orig guarda el original.
             var texts = [];
-            for (var c = 0; c < candidates.length; c++) texts.push(candidates[c].nodeValue);
+            for (var c = 0; c < candidates.length; c++) {
+              var orig = candidates[c].nodeValue;
+              candidates[c].__sb_orig = orig;
+              texts.push(orig);
+              try {
+                candidates[c].nodeValue = skeletonize(orig);
+                markSkel(candidates[c]);
+              } catch (_) {}
+            }
             callFilterTexts(texts).then(function (out) {
               for (var k = 0; k < candidates.length; k++) {
                 var v = (out && out[k] != null) ? out[k] : texts[k];
@@ -252,9 +336,16 @@ class NativeBrowserPanePlugin(private val activity: Activity) : Plugin(activity)
                 processedTextNodes.add(candidates[k]);
               }
               for (var rv = 0; rv < revealEls.length; rv++) reveal(revealEls[rv]);
+              hideLoader();
             }, function () {
-              for (var m = 0; m < candidates.length; m++) processedTextNodes.add(candidates[m]);
+              // Error del bridge: restaurar texto original (mejor que dejar
+              // bloques en `-` permanente y un loader infinito) y revelar.
+              for (var m = 0; m < candidates.length; m++) {
+                try { candidates[m].nodeValue = texts[m]; } catch (_) {}
+                processedTextNodes.add(candidates[m]);
+              }
               for (var rv2 = 0; rv2 < revealEls.length; rv2++) reveal(revealEls[rv2]);
+              hideLoader();
             });
           }
 
@@ -262,11 +353,16 @@ class NativeBrowserPanePlugin(private val activity: Activity) : Plugin(activity)
           function scheduleScan() {
             if (scanScheduled) return;
             scanScheduled = true;
-            setTimeout(function () { scanScheduled = false; scanRoot(document.body || document.documentElement); }, 50);
+            setTimeout(function () {
+              scanScheduled = false;
+              ensureLoader();
+              scanRoot(document.body || document.documentElement);
+            }, 50);
           }
 
           function onReady() {
             if (!checkText()) return;
+            ensureLoader();
             scanRoot(document.body);
             try {
               var obs = new MutationObserver(function (muts) {

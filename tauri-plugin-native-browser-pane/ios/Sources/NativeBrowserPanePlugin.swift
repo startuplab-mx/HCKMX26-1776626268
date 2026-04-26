@@ -64,10 +64,21 @@ class NativeBrowserPanePlugin: Plugin {
       var pre = document.createElement('style');
       pre.id = '__sandbox_pre';
       pre.textContent =
-        "p:not(.__sb_done),h1:not(.__sb_done),h2:not(.__sb_done)," +
-        "h3:not(.__sb_done),h4:not(.__sb_done),h5:not(.__sb_done)," +
-        "h6:not(.__sb_done){color:transparent !important;text-shadow:none !important;}" +
-        "img:not(.__sb_done){filter:blur(24px) !important;}";
+        "p:not(.__sb_done):not(.__sb_skel),h1:not(.__sb_done):not(.__sb_skel)," +
+        "h2:not(.__sb_done):not(.__sb_skel),h3:not(.__sb_done):not(.__sb_skel)," +
+        "h4:not(.__sb_done):not(.__sb_skel),h5:not(.__sb_done):not(.__sb_skel)," +
+        "h6:not(.__sb_done):not(.__sb_skel){color:transparent !important;text-shadow:none !important;}" +
+        "p.__sb_skel,h1.__sb_skel,h2.__sb_skel,h3.__sb_skel,h4.__sb_skel," +
+        "h5.__sb_skel,h6.__sb_skel{color:rgba(120,120,120,0.55) !important;text-shadow:none !important;}" +
+        "img:not(.__sb_done){filter:blur(24px) !important;}" +
+        "#__sb_loader{position:fixed;inset:0;background:rgba(15,15,25,0.92);" +
+        "display:flex;align-items:center;justify-content:center;flex-direction:column;" +
+        "gap:14px;z-index:2147483646;color:#fff;font:500 15px -apple-system,system-ui,sans-serif;" +
+        "transition:opacity 250ms ease;}" +
+        "#__sb_loader.__hide{opacity:0;pointer-events:none;}" +
+        "#__sb_spin{width:42px;height:42px;border:4px solid rgba(255,255,255,0.2);" +
+        "border-top-color:#fff;border-radius:50%;animation:__sb_spin 0.8s linear infinite;}" +
+        "@keyframes __sb_spin{to{transform:rotate(360deg)}}";
       (document.head || document.documentElement).appendChild(pre);
     } catch (_) {}
 
@@ -100,14 +111,70 @@ class NativeBrowserPanePlugin: Plugin {
     }
     if (!checkUrl()) return;
 
+    // Loader overlay + skeleton text. El loader cubre la WebView mientras
+    // corre el primer batch del clasificador; los textos pendientes se ven
+    // como `-` (skeleton) hasta que el FFI Rust devuelva su decisión.
+    var loaderHidden = false;
+    function ensureLoader() {
+      if (loaderHidden) return;
+      if (document.getElementById('__sb_loader')) return;
+      var b = document.body || document.documentElement;
+      if (!b) return;
+      try {
+        var el = document.createElement('div');
+        el.id = '__sb_loader';
+        el.innerHTML = '<div id="__sb_spin" aria-hidden="true"></div><div>Filtrando contenido…</div>';
+        b.appendChild(el);
+      } catch (_) {}
+    }
+    function hideLoader() {
+      if (loaderHidden) return;
+      loaderHidden = true;
+      var el = document.getElementById('__sb_loader');
+      if (!el) return;
+      try { el.classList.add('__hide'); } catch (_) {}
+      setTimeout(function () {
+        try { el.parentNode && el.parentNode.removeChild(el); } catch (_) {}
+      }, 300);
+    }
+    var SKEL_RE;
+    try { SKEL_RE = new RegExp('[\\\\p{L}\\\\p{N}]', 'gu'); }
+    catch (_) { SKEL_RE = /[A-Za-z0-9À-ɏ]/g; }
+    function skeletonize(s) {
+      try { return s.replace(SKEL_RE, '-'); } catch (_) { return s; }
+    }
+    function markSkel(node) {
+      var p = node.parentNode;
+      while (p && p.nodeType === 1) {
+        var t = p.tagName;
+        if (t === 'P' || (t && t.length === 2 && t.charAt(0) === 'H' &&
+            t.charAt(1) >= '1' && t.charAt(1) <= '6')) {
+          try { p.classList.add('__sb_skel'); } catch (_) {}
+          return;
+        }
+        if (t === 'BODY') return;
+        p = p.parentNode;
+      }
+    }
+
     // Bridges hacia Swift (WKScriptMessageHandlerWithReply en iOS 14+).
+    // Timeout duro para que un cuelgue del FFI no deje el loader pegado.
+    var FILTER_TIMEOUT_MS = 7000;
     function callFilterTexts(texts) {
+      var underlying;
       try {
         if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.filterTexts) {
-          return window.webkit.messageHandlers.filterTexts.postMessage(texts);
+          underlying = window.webkit.messageHandlers.filterTexts.postMessage(texts);
+        } else {
+          return Promise.resolve(texts.slice());
         }
-      } catch (_) {}
-      return Promise.resolve(texts.slice());
+      } catch (_) { return Promise.resolve(texts.slice()); }
+      return Promise.race([
+        underlying,
+        new Promise(function (resolve) {
+          setTimeout(function () { resolve(texts.slice()); }, FILTER_TIMEOUT_MS);
+        }),
+      ]);
     }
     function callFilterImage(url) {
       try {
@@ -132,7 +199,10 @@ class NativeBrowserPanePlugin: Plugin {
       return imageCache[url];
     }
 
-    function reveal(el) { el.classList.add('__sb_done'); }
+    function reveal(el) {
+      try { el.classList.remove('__sb_skel'); } catch (_) {}
+      el.classList.add('__sb_done');
+    }
     function processImg(img) {
       if (!img || img.classList.contains('__sb_done')) return;
       var src = img.currentSrc || img.src || '';
@@ -220,10 +290,22 @@ class NativeBrowserPanePlugin: Plugin {
       } catch (_) {}
       if (candidates.length === 0) {
         for (var i = 0; i < revealEls.length; i++) reveal(revealEls[i]);
+        hideLoader();
         return;
       }
+      // Skeletonizar candidatos antes del FFI: jamás mostramos el texto sin
+      // pasar por el clasificador. __sb_orig guarda el original para
+      // restaurar en error o tras la respuesta del backend.
       var texts = [];
-      for (var c = 0; c < candidates.length; c++) texts.push(candidates[c].nodeValue);
+      for (var c = 0; c < candidates.length; c++) {
+        var orig = candidates[c].nodeValue;
+        candidates[c].__sb_orig = orig;
+        texts.push(orig);
+        try {
+          candidates[c].nodeValue = skeletonize(orig);
+          markSkel(candidates[c]);
+        } catch (_) {}
+      }
       callFilterTexts(texts).then(function (out) {
         for (var k = 0; k < candidates.length; k++) {
           var v = (out && out[k] != null) ? out[k] : texts[k];
@@ -231,9 +313,16 @@ class NativeBrowserPanePlugin: Plugin {
           processedTextNodes.add(candidates[k]);
         }
         for (var rv = 0; rv < revealEls.length; rv++) reveal(revealEls[rv]);
+        hideLoader();
       }, function () {
-        for (var m = 0; m < candidates.length; m++) processedTextNodes.add(candidates[m]);
+        // Error del FFI: restaurar texto original (mejor que dejar el
+        // bloque en `-` para siempre) y revelar.
+        for (var m = 0; m < candidates.length; m++) {
+          try { candidates[m].nodeValue = texts[m]; } catch (_) {}
+          processedTextNodes.add(candidates[m]);
+        }
         for (var rv2 = 0; rv2 < revealEls.length; rv2++) reveal(revealEls[rv2]);
+        hideLoader();
       });
     }
 
@@ -241,11 +330,16 @@ class NativeBrowserPanePlugin: Plugin {
     function scheduleScan() {
       if (scanScheduled) return;
       scanScheduled = true;
-      setTimeout(function () { scanScheduled = false; scanRoot(document.body || document.documentElement); }, 50);
+      setTimeout(function () {
+        scanScheduled = false;
+        ensureLoader();
+        scanRoot(document.body || document.documentElement);
+      }, 50);
     }
 
     function onReady() {
       if (!checkText()) return;
+      ensureLoader();
       scanRoot(document.body);
       try {
         var obs = new MutationObserver(function (muts) {
