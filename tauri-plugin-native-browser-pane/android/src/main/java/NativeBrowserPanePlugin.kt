@@ -84,28 +84,23 @@ class NativeBrowserPanePlugin(private val activity: Activity) : Plugin(activity)
               "p.__sb_skel,h1.__sb_skel,h2.__sb_skel,h3.__sb_skel,h4.__sb_skel," +
               "h5.__sb_skel,h6.__sb_skel{color:rgba(120,120,120,0.55) !important;text-shadow:none !important;}" +
               "img:not(.__sb_done){filter:blur(24px) !important;}" +
-              "#__sb_loader{position:fixed !important;top:50% !important;left:50% !important;" +
-              "transform:translate(-50%,-50%) !important;width:32px !important;height:32px !important;" +
-              "margin:0 !important;padding:0 !important;border:0 !important;" +
-              "background:transparent !important;z-index:2147483647 !important;" +
-              "pointer-events:none !important;transition:opacity 250ms ease !important;}" +
-              "#__sb_loader.__hide{opacity:0 !important;}" +
-              "#__sb_spin{width:32px;height:32px;border:3px solid rgba(0,0,0,0.18);" +
-              "border-top-color:#fff;border-radius:50%;animation:__sb_spin 0.9s linear infinite;" +
-              "box-sizing:border-box;filter:drop-shadow(0 0 6px rgba(0,0,0,0.55));}" +
+              "html::before{content:'';position:fixed !important;" +
+              "top:0 !important;left:0 !important;right:0 !important;bottom:0 !important;" +
+              "margin:auto !important;width:32px !important;height:32px !important;" +
+              "border:3px solid rgba(0,0,0,0.18) !important;border-top-color:#fff !important;" +
+              "border-radius:50% !important;background:transparent !important;" +
+              "box-sizing:border-box !important;display:block !important;" +
+              "z-index:2147483647 !important;pointer-events:none !important;" +
+              "filter:drop-shadow(0 0 6px rgba(0,0,0,0.55)) !important;" +
+              "animation:__sb_spin 0.9s linear infinite !important;" +
+              "transition:opacity 250ms ease !important;}" +
+              "html.__sb_loader_done::before{opacity:0 !important;" +
+              "animation-play-state:paused !important;}" +
               "@keyframes __sb_spin{to{transform:rotate(360deg)}}";
             (document.head || document.documentElement).appendChild(pre);
           } catch (_) {}
 
-          // Loader inmediato: <div> + position:fixed con z-index máximo.
-          // El skeleton text de los párrafos protege el contenido; el
-          // spinner es sólo indicador de carga, no necesita tapar nada.
-          try {
-            var __sbLoaderInit = document.createElement('div');
-            __sbLoaderInit.id = '__sb_loader';
-            __sbLoaderInit.innerHTML = '<div id="__sb_spin" aria-hidden="true"></div>';
-            document.documentElement.appendChild(__sbLoaderInit);
-          } catch (_) {}
+          // Loader: dibujado por html::before — no insertamos elemento DOM.
 
           var BAD_URL_PATTERNS = [/porn/i,/xxx/i,/xvideos/i,/pornhub/i,/redtube/i,/youporn/i,/xnxx/i,/onlyfans/i,/chaturbate/i,/\bnsfw\b/i];
           var BAD_TEXT = ['porn','xxx','nsfw'];
@@ -141,27 +136,19 @@ class NativeBrowserPanePlugin(private val activity: Activity) : Plugin(activity)
           // corre el primer batch del FilterBridge; los textos pendientes se
           // ven como `-` (skeleton) hasta que el bridge devuelva la decisión.
           var loaderHidden = false;
-          function ensureLoader() {
-            if (loaderHidden) return;
-            if (document.getElementById('__sb_loader')) return;
-            var b = document.body || document.documentElement;
-            if (!b) return;
-            try {
-              var el = document.createElement('div');
-              el.id = '__sb_loader';
-              el.innerHTML = '<div id="__sb_spin" aria-hidden="true"></div>';
-              b.appendChild(el);
-            } catch (_) {}
-          }
+          function ensureLoader() { /* CSS-only — no-op */ }
           function hideLoader() {
             if (loaderHidden) return;
             loaderHidden = true;
-            var el = document.getElementById('__sb_loader');
-            if (!el) return;
-            try { el.classList.add('__hide'); } catch (_) {}
+            try { document.documentElement.classList.add('__sb_loader_done'); } catch (_) {}
             setTimeout(function () {
-              try { el.parentNode && el.parentNode.removeChild(el); } catch (_) {}
-            }, 300);
+              try {
+                var kill = document.createElement('style');
+                kill.id = '__sb_loader_kill';
+                kill.textContent = 'html::before{display:none !important;content:none !important;animation:none !important;}';
+                (document.head || document.documentElement).appendChild(kill);
+              } catch (_) {}
+            }, 350);
           }
           var SKEL_RE;
           try { SKEL_RE = new RegExp('[\\p{L}\\p{N}]', 'gu'); }
@@ -184,10 +171,9 @@ class NativeBrowserPanePlugin(private val activity: Activity) : Plugin(activity)
           }
 
           window.__filterCb = window.__filterCb || {};
-          // Timeout duro para que un cuelgue del FilterBridge no deje el
-          // loader pegado. Tras 7s pasa a passthrough y el catch de scanRoot
-          // restaura el texto original.
-          var FILTER_TIMEOUT_MS = 7000;
+          // Timeout 60s — el bridge Kotlin procesa todos los textos antes de
+          // responder; con 7s se disparaba antes y devolvía passthrough.
+          var FILTER_TIMEOUT_MS = 60000;
           function callFilterTexts(texts) {
             var underlying;
             try {

@@ -35,42 +35,34 @@
       "p.__sb_skel,h1.__sb_skel,h2.__sb_skel,h3.__sb_skel,h4.__sb_skel," +
       "h5.__sb_skel,h6.__sb_skel{color:rgba(120,120,120,0.55) !important;text-shadow:none !important;}" +
       "img:not(.__sb_done){filter:blur(24px) !important;}" +
-      // Loader minimalista: un <div> sin background ni borde, posicionado
-      // fixed en el centro del viewport. Sólo contiene el spinner. La
-      // protección del contenido viene del skeleton text (`-`) en los
-      // párrafos y del pre-hide blur en imágenes, no de un overlay opaco.
-      // !important neutraliza CSS heredado del sitio (display, position,
-      // z-index, etc.). pointer-events:none deja pasar clicks y scroll.
-      "#__sb_loader{position:fixed !important;top:50% !important;left:50% !important;" +
-      "transform:translate(-50%,-50%) !important;width:32px !important;height:32px !important;" +
-      "margin:0 !important;padding:0 !important;border:0 !important;" +
-      "background:transparent !important;z-index:2147483647 !important;" +
-      "pointer-events:none !important;transition:opacity 250ms ease !important;}" +
-      "#__sb_loader.__hide{opacity:0 !important;}" +
-      // Ring fino: borde oscuro tenue + arc superior blanco + drop-shadow
-      // para que sea legible sobre fondos claros (drop-shadow oscuro hace
-      // silueta) y oscuros (el blanco contrasta solo).
-      "#__sb_spin{width:32px;height:32px;border:3px solid rgba(0,0,0,0.18);" +
-      "border-top-color:#fff;border-radius:50%;animation:__sb_spin 0.9s linear infinite;" +
-      "box-sizing:border-box;filter:drop-shadow(0 0 6px rgba(0,0,0,0.55));}" +
+      // Spinner CSS-only via `html::before`. El pseudo-element se renderiza
+      // desde el primer paint (no depende de que <body> exista ni de que
+      // documentElement acepte children no estándar — WebKit a veces los
+      // ignora). Ningún JS del sitio puede borrarlo. Centrado con
+      // inset:0+margin:auto (el `transform` lo reservamos para la rotation
+      // de la animación). Se oculta añadiendo `.__sb_loader_done` al <html>;
+      // un `<style>` extra lo aniquila tras la transición para liberar la
+      // animation y evitar repaint continuo.
+      "html::before{content:'';position:fixed !important;" +
+      "top:0 !important;left:0 !important;right:0 !important;bottom:0 !important;" +
+      "margin:auto !important;width:32px !important;height:32px !important;" +
+      "border:3px solid rgba(0,0,0,0.18) !important;border-top-color:#fff !important;" +
+      "border-radius:50% !important;background:transparent !important;" +
+      "box-sizing:border-box !important;display:block !important;" +
+      "z-index:2147483647 !important;pointer-events:none !important;" +
+      "filter:drop-shadow(0 0 6px rgba(0,0,0,0.55)) !important;" +
+      "animation:__sb_spin 0.9s linear infinite !important;" +
+      "transition:opacity 250ms ease !important;}" +
+      "html.__sb_loader_done::before{opacity:0 !important;" +
+      "animation-play-state:paused !important;}" +
       "@keyframes __sb_spin{to{transform:rotate(360deg)}}";
     (document.head || document.documentElement).appendChild(pre);
   } catch (_) {}
 
-  // ---------- 1.5. Loader overlay (visible desde el primer paint) ----------
-  // El initialization_script corre antes de que exista <body>, pero
-  // <html> (documentElement) ya está. position:fixed con z-index máximo
-  // garantiza que el spinner cubra el viewport en cualquier sitio. Si el
-  // sitio destruye el elemento via document.write, ensureLoader() lo
-  // recrea en runScan(). Antes usamos <dialog>+showModal para top-layer,
-  // pero el UA stylesheet del dialog deja artefactos visuales (border
-  // groove, outline focus) que rompían el look minimalista.
-  try {
-    var __sbLoaderInit = document.createElement("div");
-    __sbLoaderInit.id = "__sb_loader";
-    __sbLoaderInit.innerHTML = '<div id="__sb_spin" aria-hidden="true"></div>';
-    document.documentElement.appendChild(__sbLoaderInit);
-  } catch (_) {}
+  // (1.5) Loader: ya está dibujado por `html::before` del CSS de arriba.
+  // No insertamos ningún elemento DOM — ningún script del sitio puede
+  // borrarlo, y aparece desde el primer paint sin depender del orden de
+  // construcción del body.
 
   // ---------- 2. URL/keyword block existente ----------
   var BAD_URL_PATTERNS = [
@@ -134,28 +126,29 @@
   // `-` para que jamás se exponga texto sin clasificar.
   var loaderHidden = false;
 
-  function ensureLoader() {
-    if (loaderHidden) return;
-    if (document.getElementById("__sb_loader")) return;
-    var b = document.body || document.documentElement;
-    if (!b) return; // todavía no hay DOM; se reintenta en runScan()
-    try {
-      var el = document.createElement("div");
-      el.id = "__sb_loader";
-      el.innerHTML = '<div id="__sb_spin" aria-hidden="true"></div>';
-      b.appendChild(el);
-    } catch (_) {}
-  }
+  // CSS-only loader: no hay nada que asegurar — el `html::before` del
+  // pre-hide CSS ya está dibujando el spinner. Se mantiene la función
+  // como no-op para no tocar los call-sites de `runScan`/`onReady`.
+  function ensureLoader() {}
 
   function hideLoader() {
     if (loaderHidden) return;
     loaderHidden = true;
-    var el = document.getElementById("__sb_loader");
-    if (!el) return;
-    try { el.classList.add("__hide"); } catch (_) {}
+    try {
+      document.documentElement.classList.add("__sb_loader_done");
+    } catch (_) {}
+    // Tras la fade transition, aniquilamos el pseudo-element con un style
+    // override (display:none + content:none + animation:none). Eso libera
+    // la animation y evita repaint continuo.
     setTimeout(function () {
-      try { el.parentNode && el.parentNode.removeChild(el); } catch (_) {}
-    }, 300);
+      try {
+        var kill = document.createElement("style");
+        kill.id = "__sb_loader_kill";
+        kill.textContent =
+          "html::before{display:none !important;content:none !important;animation:none !important;}";
+        (document.head || document.documentElement).appendChild(kill);
+      } catch (_) {}
+    }, 350);
   }
 
   // Reemplaza letras (\p{L}) y dígitos (\p{N}) por '-'. Espacios y puntuación
@@ -190,11 +183,13 @@
   // TEXTO BATCHED — desktop: invoke nativo con items{text,coords}+pageUrl.
   // Mobile: bridge nativo (filterTexts) sigue con array de strings, sin
   // coordenadas, hasta que se implemente el reporte de eventos en mobile.
-  // Timeout duro: si el clasificador cuelga (rara vez, pero CoreML EP
-  // puede recompilar minutos en device), pasamos en passthrough silencioso
-  // para no dejar el spinner pegado y permitir que el catch del chunk loop
-  // restaure los nodos a su texto original.
-  var FILTER_TIMEOUT_MS = 7000;
+  // Timeout duro: en iOS el FFI procesa TODOS los textos en una sola
+  // llamada (CHUNK_SIZE=12 dentro de Rust, pero cada session.run es
+  // ~5s en device para mDeBERTa-base — 4 chunks → ~16-20s típico para
+  // 40 textos). Antes era 7s y se disparaba SIEMPRE en iOS,
+  // devolviendo passthrough (originales) y el filtrado real llegaba
+  // después demasiado tarde para aplicarse. 60s cubre el peor caso.
+  var FILTER_TIMEOUT_MS = 60000;
   function callFilterTexts(items, pageUrl) {
     var texts = items.map(function (it) { return it.text; });
     var underlying;
