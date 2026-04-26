@@ -4,7 +4,7 @@
 
 # Shield
 
-**Navegación segura para niños — IA en el dispositivo, filtrado en tres capas, multiplataforma.**
+**Sandbox seguro para menores — IA en el dispositivo, filtrado en tres capas, multiplataforma.**
 
 [![Tauri](https://img.shields.io/badge/Tauri-2.x-24C8DB?logo=tauri&logoColor=white)](https://tauri.app/)
 [![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=white)](https://react.dev/)
@@ -40,11 +40,11 @@
 
 ## Sobre el proyecto
 
-**Shield** es una aplicación multiplataforma —desktop, iOS y Android desde un solo código— que funciona como un *"sistema operativo simplificado"* para menores de edad. En lugar de exponer todo el dispositivo, presenta un home con apenas cinco aplicaciones cuidadosamente acotadas: **Navegador**, **Facebook**, **Instagram**, **Calculadora** y **Notas**.
+**Shield** es una aplicación multiplataforma —desktop, iOS y Android— que funciona como un **entorno seguro** para menores de edad: un sandbox que reemplaza la experiencia abierta del dispositivo por un conjunto acotado de aplicaciones supervisadas. La selección actual incluye **Navegador**, **Facebook**, **Instagram**, **Calculadora** y **Notas**; el catálogo es deliberadamente extensible y la calculadora y las notas evidencian que Shield aspira a cubrir capacidades de un sistema operativo de uso diario, no únicamente la navegación.
 
-La diferencia frente a controles parentales tradicionales no está en el catálogo de apps, sino en lo que ocurre debajo: cada vez que el menor abre una página, **tres capas independientes de filtrado** —URL, texto del DOM e imágenes— inspeccionan el contenido **directamente en el dispositivo** usando ONNX Runtime nativo. Sin nube, sin latencia de red en la ruta crítica, sin que ningún texto o imagen del menor abandone el equipo.
+La diferencia frente a controles parentales o filtros a nivel de red no está en el catálogo de apps, sino en lo que ocurre debajo: cada vez que el menor consume contenido, **tres capas independientes de filtrado** —URL, texto del DOM e imágenes— inspeccionan ese contenido **directamente en el dispositivo** usando ONNX Runtime nativo. Sin nube, sin latencia de red en la ruta crítica, sin que ningún texto o imagen del menor abandone el equipo.
 
-Para el tutor, Shield expone un **dashboard separado** (también construido con Tauri + React) que recibe únicamente eventos anónimos de telemetría —tipo de filtrado, acción tomada, coordenadas en pantalla, categoría detectada— vía un servidor Actix-web. El dashboard incluye un *heatmap espacial* y una tabla ordenable de incidentes en tiempo real, sin almacenar el contenido original del menor.
+En paralelo, Shield expone un **dashboard administrativo** independiente (también construido con Tauri + React) pensado para el equipo supervisor —no para el padre individual—. Recibe únicamente eventos anónimos de telemetría (tipo de filtrado, acción tomada, coordenadas en pantalla, categoría detectada, URL) vía un servidor Actix-web, y los presenta como tabla ordenable y *heatmap espacial* en tiempo real, sin almacenar el contenido original.
 
 La arquitectura prioriza tres principios: **privacidad por diseño** (cómputo local), **defensa en profundidad** (cada capa cubre los huecos de las otras) y **portabilidad real** (un único workspace de Cargo + Tauri compila para los cinco sistemas operativos objetivo).
 
@@ -54,13 +54,17 @@ La arquitectura prioriza tres principios: **privacidad por diseño** (cómputo l
 
 <table>
   <tr>
-    <td align="center">
-      <img src="images/app1.png" alt="Home del OS infantil" width="320" /><br/>
-      <sub><b>Home — el "OS" infantil con las cinco apps permitidas</b></sub>
+    <td align="center" width="33%">
+      <img src="images/app1.png" alt="Home con las apps disponibles" width="260" /><br/>
+      <sub><b>Home</b> — sandbox con las apps disponibles</sub>
     </td>
-    <td align="center">
-      <img src="images/app2.png" alt="Filtrado de imágenes en una búsqueda real" width="320" /><br/>
-      <sub><b>Capa 3 en acción — imágenes de una búsqueda censuradas con blur gaussiano real</b></sub>
+    <td align="center" width="33%">
+      <img src="images/app3.png" alt="Texto censurado en resultados" width="260" /><br/>
+      <sub><b>Capa 2</b> — texto censurado en resultados de búsqueda</sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="images/app2.png" alt="Imágenes censuradas en búsqueda" width="260" /><br/>
+      <sub><b>Capa 3</b> — imágenes de una búsqueda censuradas</sub>
     </td>
   </tr>
 </table>
@@ -72,10 +76,10 @@ La arquitectura prioriza tres principios: **privacidad por diseño** (cómputo l
 Los menores que acceden a internet sin supervisión quedan expuestos a contenido para adultos, lenguaje violento, imágenes explícitas y dinámicas de grooming. Las soluciones existentes —controles parentales del sistema operativo, extensiones de navegador, *router-level filtering*— comparten tres limitaciones estructurales:
 
 1. **Son fácilmente evadibles.** Un cambio de DNS, una sesión de incógnito o un perfil distinto basta para sortearlas.
-2. **Requieren configuración técnica avanzada** del padre o tutor, lo que crea una brecha real entre quien necesita la herramienta y quien sabe instalarla.
+2. **Requieren configuración técnica avanzada** del adulto a cargo, lo que crea una brecha real entre quien necesita la herramienta y quien sabe instalarla.
 3. **No ofrecen visibilidad en tiempo real** del contenido que el menor está consultando, ni mucho menos correlación espacial con la página visitada.
 
-Shield aborda los tres frentes: el menor solo puede navegar dentro de un entorno controlado por la app; el tutor obtiene un dashboard listo para usar sin tocar configuración del sistema; y cada decisión de filtrado se reporta como un evento anónimo con coordenadas, URL y categoría detectada.
+Shield aborda los tres frentes: el menor opera dentro de un entorno acotado donde cada interacción —navegación, búsquedas, redes sociales, lectura de texto, visualización de imágenes— atraviesa los filtros antes de renderizarse; el equipo supervisor accede a un dashboard listo para usar sin tocar configuración del sistema; y cada decisión de filtrado se reporta como un evento anónimo con coordenadas, URL y categoría detectada.
 
 ---
 
@@ -92,7 +96,7 @@ flowchart LR
     E --> G
     F --> G
     G --> H[Servidor Actix-web<br/>/events]
-    H --> I[Dashboard del tutor<br/>tabla + heatmap]
+    H --> I[Dashboard administrativo<br/>tabla + heatmap]
 ```
 
 | Capa | Mecanismo | Dónde vive |
@@ -113,8 +117,8 @@ El cierre del flujo es un `EventEmitter` que postea cada decisión `Block`/`Warn
 
 **Privacidad real**
 - Toda la inferencia ocurre en el dispositivo (CPU / GPU / Apple Neural Engine vía CoreML EP).
-- Solo eventos anónimos —sin contenido original— viajan al servidor del tutor.
-- El servidor nunca persiste a disco: `VecDeque` en memoria con tope de 1000 eventos.
+- Solo eventos anónimos —sin contenido original— viajan al servidor administrativo.
+- Telemetría minimalista: tipo, acción, categorías, coordenadas y URL. Nada del contenido del menor.
 
 **Defensa en profundidad**
 - Pre-hide CSS impide que cualquier texto/imagen sea visible *antes* de que la IA decida.
@@ -143,12 +147,12 @@ El cierre del flujo es un `EventEmitter` que postea cada decisión `Block`/`Warn
 
 ## Stack tecnológico
 
-### Frontend (app del menor + dashboard del tutor)
+### Frontend (app del menor + dashboard administrativo)
 
 | Tecnología | Versión | Propósito |
 |---|---|---|
 | Tauri | 2.x | Framework desktop/móvil con WebView nativo |
-| React | 19.x | UI del "OS" infantil y del dashboard |
+| React | 19.x | UI del sandbox y del dashboard |
 | TypeScript | ~5.8 | Tipado estático del cliente |
 | Tailwind CSS | 4.x | Estilos del frontend |
 | Vite | 7.x | Build y dev server |
@@ -161,7 +165,7 @@ El cierre del flujo es un `EventEmitter` que postea cada decisión `Block`/`Warn
 | Crate | Propósito |
 |---|---|
 | `app/src-tauri` | App principal: comandos IPC, blocklist de URLs, blur de imágenes, emisor de eventos |
-| `dashboard/src-tauri` | App de tutor: polling y normalización de eventos |
+| `dashboard/src-tauri` | App administrativa: polling y normalización de eventos |
 | `classifier` | Pipeline NLI + clasificador de imágenes vía ONNX Runtime |
 | `tauri-plugin-native-browser-pane` | Plugin custom que expone WKWebView (iOS) y WebView (Android) a Tauri 2 |
 | `server` | API Actix-web para ingesta y polling de `FilterEvent` |
@@ -195,7 +199,7 @@ flowchart TD
       PLG[tauri-plugin-native-browser-pane]
     end
 
-    subgraph Dashboard["Dashboard (tutor)"]
+    subgraph Dashboard["Dashboard administrativo"]
       DUI[React 19 UI<br/>tabla + heatmap]
       DLIB[lib.rs · fetch_events]
     end
@@ -223,7 +227,7 @@ hackathon404/
 ├── app/                              # App principal (Tauri + React)
 │   ├── src/                          # Frontend: Desktop, Navegador, Calc, Notas
 │   └── src-tauri/                    # Backend Rust + filter.js inyectado
-├── dashboard/                        # Panel del tutor (Tauri + React)
+├── dashboard/                        # Panel administrativo (Tauri + React)
 │   └── src/                          # Tabla, heatmap, polling
 ├── classifier/                       # Pipeline NLI + MobileCLIP en Rust
 ├── classifier-py/                    # Pipeline NLI en Python (dev/testing)
@@ -258,7 +262,7 @@ La decisión final (`decide.rs`) usa umbrales por categoría:
 | Score vs. umbral | Acción |
 |---|---|
 | Score < umbral | `Allow` (sin evento) |
-| Score ≥ umbral | `Warn` (notifica al tutor) |
+| Score ≥ umbral | `Warn` (notifica al administrador) |
 | Score ≥ umbral + 0.15 | `Block` (texto censurado) |
 
 Optimizaciones notables: caché LRU de 4096 entradas keyed por `hash(texto, contexto)` (`pipeline.rs` líneas 37–50), margen neutral de 0.10 contra anchors *safe* para evitar falsos positivos, y procesamiento por chunks streaming para no bloquear la UI.
@@ -306,7 +310,7 @@ Si la decisión es `Allow`, los bytes originales pasan tal cual sin re-encode. S
 
 ---
 
-> **Nota sobre privacidad.** Los tres clasificadores corren **en el dispositivo del menor** vía ONNX Runtime con execution providers nativos (CoreML en iOS, CPU/GPU en desktop). Ningún texto ni imagen del menor sale del equipo. Lo único que viaja al servidor del tutor es el `FilterEvent`: tipo (`text`/`image`), acción (`block`/`warn`), categorías detectadas, coordenadas en pantalla, URL y timestamp. Esto es verificable inspeccionando `common/src/lib.rs` y `app/src-tauri/src/lib.rs` (`EventEmitter`, líneas 31–59).
+> **Nota sobre privacidad.** Los tres clasificadores corren **en el dispositivo del menor** vía ONNX Runtime con execution providers nativos (CoreML en iOS, CPU/GPU en desktop). Ningún texto ni imagen del menor sale del equipo. Lo único que viaja al servidor administrativo es el `FilterEvent`: tipo (`text`/`image`), acción (`block`/`warn`), categorías detectadas, coordenadas en pantalla, URL y timestamp. Esto es verificable inspeccionando `common/src/lib.rs` y `app/src-tauri/src/lib.rs` (`EventEmitter`, líneas 31–59).
 
 ---
 
@@ -321,7 +325,7 @@ Si la decisión es `Allow`, los bytes originales pasan tal cual sin re-encode. S
 - Para Android: Android SDK + NDK configurados
 - Para iOS: macOS + Xcode
 
-### Quickstart (3 comandos)
+### Quickstart
 
 ```bash
 git clone https://github.com/zam-cv/hackathon404
@@ -329,7 +333,7 @@ cd hackathon404/app
 bun install && bun run tauri dev
 ```
 
-Esto inicia la app principal en modo desarrollo en desktop con la UI completa funcional. Para activar el filtrado de IA en producción necesitarás los modelos ONNX (siguiente sección).
+Eso levanta la app en desktop con toda la UI funcional. **Para ver el filtrado de IA en acción hay que ejecutar antes los dos exports de modelos** (NLI para texto y MobileCLIP para imágenes): los pesos no se incluyen en el repositorio (`*.onnx`, `*.npy` están gitignored) y deben generarse localmente. Ambos exports se documentan abajo.
 
 ### Por componente
 
@@ -355,33 +359,43 @@ bun run tauri build
 </details>
 
 <details>
-<summary><b>Exportar modelos de IA — MobileCLIP-S1 a ONNX</b></summary>
+<summary><b>Exportar modelos de IA (requerido para activar el filtrado)</b></summary>
+
+Los pesos de los modelos están gitignored (`*.onnx`, `*.npy`, `onnx_model/`). Para que el clasificador funcione hay que generar **dos** paquetes localmente:
+
+**1) NLI multilingüe (texto)** — exporta y cuantiza `MoritzLaurer/multilingual-MiniLMv2-L6-mnli-xnli` a ONNX int8 dentro de `classifier-py/onnx_model/`:
 
 ```bash
-cd nsfw-py
+cd classifier-py
+cp .env.example .env             # define NLI_MODEL, categorías, hipótesis, umbrales
+uv sync --extra export
+uv run python src/export.py
+```
+
+Salida en `classifier-py/onnx_model/`: `model.onnx`, `tokenizer.json`, `config.json`, `meta.json`, etc.
+
+**2) MobileCLIP-S1 (imagen)** — exporta el encoder de imagen y los 13 anchors de texto precomputados:
+
+```bash
+cd ../nsfw-py
 uv sync
 uv run python src/export.py
 ```
 
-Esto descarga `apple/MobileCLIP-S1` (~140 MB) la primera vez al cache de HuggingFace (`~/.cache/huggingface/`) y genera:
+Salida en `nsfw-py/mobileclip/`: `mobileclip_image.onnx`, `text_features_anchors.npy` (y opcionalmente `mobileclip_text.onnx` con `--with-text`). La primera corrida descarga `apple/MobileCLIP-S1` (~140 MB) al cache de HuggingFace (`~/.cache/huggingface/`).
 
-```
-nsfw-py/mobileclip/
-├── mobileclip_image.onnx        # encoder de imagen
-├── text_features_anchors.npy    # 13 anchors precomputados
-└── mobileclip_text.onnx         # opcional con --with-text
-```
-
-`app/src-tauri/build.rs` los hardlinks/copia a `app/src-tauri/resources/mobileclip/` para que Tauri los empaquete en el bundle.
+`app/src-tauri/build.rs` toma ambos paquetes y los enlaza/copia a `app/src-tauri/resources/{onnx_model,mobileclip}/` para que Tauri los empaquete en el bundle final.
 
 </details>
 
 <details>
-<summary><b>Clasificador Python (desarrollo y testing)</b></summary>
+<summary><b>Clasificador Python (banco de pruebas y ajuste de hipótesis)</b></summary>
+
+`classifier-py/src/main.py` corre el pipeline NLI completo en Python (HuggingFace `transformers`) sobre los `TEST_CASES` definidos en `.env`. Es la forma rápida de iterar sobre categorías y umbrales antes de re-exportar y desplegar al runtime Rust.
 
 ```bash
 cd classifier-py
-cp .env.example .env  # editar categorías, hipótesis, umbrales, casos de prueba
+cp .env.example .env
 uv sync
 uv run python src/main.py
 ```
@@ -407,12 +421,12 @@ Levanta Actix-web en `http://127.0.0.1:7878` con tres endpoints:
 | `GET` | `/events?since=<ms>` | Polling incremental para el dashboard |
 | `DELETE` | `/events` | Limpia el buffer (auth) |
 
-Capacidad: `VecDeque` en memoria con tope de 1000 eventos; FIFO al desbordar.
+Diseñado como capa de ingesta ligera para el alcance del hackathon: el buffer vive en memoria (`VecDeque` con tope configurable) y la interfaz HTTP está desacoplada del almacenamiento, lo que permite intercambiarlo por Postgres, Kafka u otro backend persistente sin cambios en cliente ni dashboard.
 
 </details>
 
 <details>
-<summary><b>Dashboard del tutor</b></summary>
+<summary><b>Dashboard administrativo</b></summary>
 
 ```bash
 cd dashboard
@@ -439,18 +453,22 @@ Ambas se leen y cachean en `common/src/lib.rs`.
 
 <table>
   <tr>
-    <td align="center">
-      <img src="images/app1.png" alt="Home del OS infantil" width="320" /><br/>
-      <sub><b>Home en iOS</b> — las cinco apps permitidas, widget de fecha en español</sub>
+    <td align="center" width="33%">
+      <img src="images/app1.png" alt="Home en iOS" width="260" /><br/>
+      <sub><b>Home en iOS</b> — sandbox con las apps disponibles y widget de fecha en español</sub>
     </td>
-    <td align="center">
-      <img src="images/app2.png" alt="Filtrado en acción" width="320" /><br/>
-      <sub><b>Capa 3 funcionando</b> — búsqueda de "arma" en DuckDuckGo con todas las imágenes censuradas</sub>
+    <td align="center" width="33%">
+      <img src="images/app3.png" alt="Capa 2 funcionando" width="260" /><br/>
+      <sub><b>Capa 2 funcionando</b> — búsqueda en DuckDuckGo con párrafos censurados manteniendo la estructura del DOM</sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="images/app2.png" alt="Capa 3 funcionando" width="260" /><br/>
+      <sub><b>Capa 3 funcionando</b> — búsqueda de "arma" con todas las imágenes censuradas</sub>
     </td>
   </tr>
 </table>
 
-> **Cómo verlo en vivo.** No hay demo desplegada públicamente: por la naturaleza nativa del proyecto (Tauri + ONNX Runtime + WKWebView/Android WebView) el prototipo se experimenta corriéndolo localmente. Sigue la sección de [Ejecución](#ejecución) para tenerlo funcionando en menos de 5 minutos en tu máquina.
+> **Cómo verlo en vivo.** Por la naturaleza nativa del proyecto (Tauri + ONNX Runtime + WKWebView/Android WebView) Shield se experimenta corriéndolo localmente. Sigue la sección de [Ejecución](#ejecución) y la guía de exports de modelos para tenerlo funcionando en tu máquina.
 
 ---
 
@@ -462,7 +480,7 @@ hackathon404/
 ├── classifier/                       # Pipeline NLI + MobileCLIP en Rust con ONNX Runtime
 ├── classifier-py/                    # Réplica del pipeline NLI en Python (dev/testing)
 ├── common/                           # Tipos compartidos: FilterEvent, FilterKind, FilterAction
-├── dashboard/                        # Panel del tutor (Tauri + React) — tabla + heatmap
+├── dashboard/                        # Panel administrativo (Tauri + React) — tabla + heatmap
 ├── images/                           # Logo y capturas usadas en este README
 ├── nsfw-py/                          # Exportador MobileCLIP-S1 → ONNX
 ├── server/                           # Servidor Actix-web de telemetría
