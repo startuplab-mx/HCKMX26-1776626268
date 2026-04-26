@@ -5,14 +5,14 @@
 //!
 //!   cargo run --bin classify_test
 //!
-//! Defaults to loading from the repo's classifier/ output (../../classifier/onnx_model/)
+//! Defaults to loading from the repo's classifier-py/ output (../../classifier-py/onnx_model/)
 //! and the runtime.json bundled in resources/.
 
 use std::path::PathBuf;
 use std::time::Instant;
 
 use anyhow::{Context, Result};
-use classifier_core::{Action, Classifier};
+use classifier::{Action, Classifier};
 
 fn main() -> Result<()> {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -20,8 +20,8 @@ fn main() -> Result<()> {
     let classifier_dir = manifest
         .parent()
         .and_then(|p| p.parent())
-        .map(|p| p.join("classifier/onnx_model"))
-        .ok_or_else(|| anyhow::anyhow!("no se pudo derivar la ruta de classifier/"))?;
+        .map(|p| p.join("classifier-py/onnx_model"))
+        .ok_or_else(|| anyhow::anyhow!("no se pudo derivar la ruta de classifier-py/"))?;
 
     let runtime_path = resources.join("runtime.json");
     let model_path = classifier_dir.join("model.onnx");
@@ -33,7 +33,7 @@ fn main() -> Result<()> {
 
     if !model_path.exists() {
         anyhow::bail!(
-            "{} no existe. Corre primero: cd classifier && uv run --extra export python src/export.py",
+            "{} no existe. Corre primero: cd classifier-py && uv run --extra export python src/export.py",
             model_path.display()
         );
     }
@@ -123,7 +123,7 @@ fn main() -> Result<()> {
         let solo = classifier.classify(ultimo, &[])?;
         let con = classifier.classify(ultimo, &previos)?;
 
-        let was_ok = |d: &classifier_core::Decision| -> bool {
+        let was_ok = |d: &classifier::Decision| -> bool {
             match (&case.expected, &d.action) {
                 (None, Action::Permitir) => true,
                 (Some(e), _) => d.categories.iter().any(|c| c == e),

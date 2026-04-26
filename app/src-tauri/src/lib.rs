@@ -1,19 +1,95 @@
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
+use serde::Deserialize;
 use tauri::{AppHandle, Manager};
 
-use classifier_core::{apply_filter_batch, Classifier};
+use classifier::{
+    obscure_dashes, obscure_full, Action, Classifier, ImageClassifier, ImageDecision,
+    MIN_TEXT_LEN_FOR_CLASSIFY,
+};
+use common::{auth_token, server_url, Coords, FilterAction, FilterEvent, FilterKind};
 
 
 /// Wraps an optional Classifier so we can boot the app even when the model
-/// hasn't been exported yet (Phase 0). Filtering becomes passthrough in that
-/// case; logs explain how to enable.
+/// hasn't been exported yet (Phase 0). Filtering becomes passthrough en ese
+/// caso; logs explican cómo habilitar.
 struct ClassifierHolder(Option<Arc<Classifier>>);
+
+/// Análogo para el clasificador zero-shot de imágenes (MobileCLIP S1).
+/// Si los archivos no están bundled, dejamos `None` y caemos al modo
+/// "blur all" — el comportamiento previo a la integración del modelo.
+struct ImageClassifierHolder(Option<Arc<ImageClassifier>>);
+
+/// Cliente HTTP que reporta cada `FilterEvent` (no permitido) al server
+/// Actix. Spawns un task tokio para no bloquear el hot path del filtrado.
+/// Si la URL del server no está configurada o el server está abajo, los
+/// errores se loggean y se ignoran — la app no debe romper porque el
+/// dashboard no esté corriendo.
+#[derive(Clone)]
+struct EventEmitter {
+    client: reqwest::Client,
+    server_url: String,
+}
+
+impl EventEmitter {
+    fn new() -> Self {
+        Self {
+            client: reqwest::Client::new(),
+            server_url: server_url(),
+        }
+    }
+
+    fn emit(&self, event: FilterEvent) {
+        let client = self.client.clone();
+        let url = format!("{}/events", self.server_url);
+        tokio::spawn(async move {
+            let resp = client
+                .post(&url)
+                .bearer_auth(auth_token())
+                .json(&event)
+                .send()
+                .await;
+            if let Err(e) = resp {
+                eprintln!("[event-emitter] post falló: {e}");
+            }
+        });
+    }
+}
+
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+fn new_event_id() -> String {
+    use rand::Rng;
+    let r: u64 = rand::thread_rng().gen();
+    format!("{:016x}", r)
+}
+
+fn action_to_filter_action(a: Action) -> FilterAction {
+    match a {
+        Action::Permitir => FilterAction::Allow,
+        Action::Avisar => FilterAction::Warn,
+        Action::Bloquear => FilterAction::Block,
+    }
+}
+
+fn obscure_for(action: Action, text: &str) -> String {
+    match action {
+        Action::Bloquear => obscure_full(text),
+        Action::Avisar => obscure_dashes(text),
+        Action::Permitir => text.to_string(),
+    }
+}
 
 /// Locates the ONNX model + runtime config. Tries the bundled resource dir
 /// first (production builds), then falls back to the dev path under
-/// `classifier/onnx_model/`.
+/// `classifier-py/onnx_model/`.
 fn try_load_classifier(app: &tauri::App) -> anyhow::Result<Classifier> {
     let resource_dir = app.path().resource_dir().ok();
 
@@ -35,12 +111,12 @@ fn try_load_classifier(app: &tauri::App) -> anyhow::Result<Classifier> {
             let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .parent()?
                 .parent()?
-                .join("classifier/onnx_model");
+                .join("classifier-py/onnx_model");
             p.exists().then_some(p)
         })
         .ok_or_else(|| {
             anyhow::anyhow!(
-                "onnx_model/ no encontrado. Corre: cd classifier && uv run --extra export python src/export.py",
+                "onnx_model/ no encontrado. Corre: cd classifier-py && uv run --extra export python src/export.py",
             )
         })?;
 
@@ -49,6 +125,38 @@ fn try_load_classifier(app: &tauri::App) -> anyhow::Result<Classifier> {
     let meta_path = onnx_dir.join("meta.json");
 
     Classifier::new(&runtime_path, &model_path, &tokenizer_path, &meta_path)
+}
+
+/// Localiza los archivos del clasificador de imágenes MobileCLIP. Igual que
+/// `try_load_classifier`: bundled resource dir primero, dev path como fallback.
+fn try_load_image_classifier(app: &tauri::App) -> anyhow::Result<ImageClassifier> {
+    let resource_dir = app.path().resource_dir().ok();
+
+    let dir = resource_dir
+        .as_ref()
+        .map(|r| r.join("mobileclip"))
+        .filter(|p| p.exists())
+        .or_else(|| {
+            let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/mobileclip");
+            p.exists().then_some(p)
+        })
+        .ok_or_else(|| anyhow::anyhow!("resources/mobileclip/ no encontrado"))?;
+
+    let model_path = dir.join("mobileclip_image.onnx");
+    let anchors_path = dir.join("text_features_anchors.npy");
+    if !model_path.exists() {
+        return Err(anyhow::anyhow!(
+            "falta {} (mueve los archivos del compañero ahí)",
+            model_path.display()
+        ));
+    }
+    if !anchors_path.exists() {
+        return Err(anyhow::anyhow!(
+            "falta {} (mueve los archivos del compañero ahí)",
+            anchors_path.display()
+        ));
+    }
+    ImageClassifier::new(&model_path, &anchors_path)
 }
 
 
@@ -210,21 +318,90 @@ async fn set_browser_view_bounds(
     Ok(())
 }
 
+/// Item con texto + coordenadas del elemento (CSS px relativos al viewport
+/// de la WebView). Las coordenadas viajan al dashboard para ubicar el evento
+/// en su posición real (heatmap / overlay).
+#[derive(Deserialize)]
+struct TextItem {
+    text: String,
+    coords: Coords,
+}
+
 /// Filtra una lista de textos en una sola IPC. Cada texto pasa por el clasificador
 /// zero-shot multi-hipótesis: si la decisión es BLOQUEAR se reemplazan los
 /// alfanuméricos por █, si es AVISAR se reemplazan las letras por '-', y si es
 /// PERMITIR se devuelve el texto sin cambios. Si el modelo no está cargado
 /// (Phase 0 no corrida), todos los textos pasan sin cambios.
+///
+/// Por cada decisión != Permitir emite un `FilterEvent` al server con las
+/// coordenadas del elemento para que el dashboard lo muestre.
 #[tauri::command]
 async fn filter_texts(
     state: tauri::State<'_, ClassifierHolder>,
-    texts: Vec<String>,
+    emitter: tauri::State<'_, EventEmitter>,
+    items: Vec<TextItem>,
+    page_url: String,
 ) -> Result<Vec<String>, String> {
     let classifier = state.0.clone();
+    let emitter = emitter.inner().clone();
 
-    let result = tokio::task::spawn_blocking(move || match classifier {
-        Some(c) => apply_filter_batch(&c, &texts),
-        None => texts,
+    let result = tokio::task::spawn_blocking(move || -> Vec<String> {
+        // Sin modelo: passthrough de todos los textos (sin eventos).
+        let Some(classifier) = classifier else {
+            return items.into_iter().map(|i| i.text).collect();
+        };
+
+        let mut results: Vec<String> = vec![String::new(); items.len()];
+        let mut to_classify: Vec<String> = Vec::with_capacity(items.len());
+        let mut idx_map: Vec<usize> = Vec::with_capacity(items.len());
+
+        for (i, item) in items.iter().enumerate() {
+            if item.text.trim().chars().count() < MIN_TEXT_LEN_FOR_CLASSIFY {
+                results[i] = item.text.clone();
+            } else {
+                idx_map.push(i);
+                to_classify.push(item.text.clone());
+            }
+        }
+
+        if to_classify.is_empty() {
+            return results;
+        }
+
+        match classifier.classify_many(&to_classify, &[]) {
+            Ok(decisions) => {
+                for (k, decision) in decisions.into_iter().enumerate() {
+                    let i = idx_map[k];
+                    let original = &to_classify[k];
+                    let filtered = obscure_for(decision.action.clone(), original);
+                    results[i] = filtered.clone();
+
+                    // Emite evento sólo para decisiones disruptivas. Permitir
+                    // se ignora — saturaría al server sin valor para el dashboard.
+                    if !matches!(decision.action, Action::Permitir) {
+                        emitter.emit(FilterEvent {
+                            id: new_event_id(),
+                            kind: FilterKind::Text,
+                            action: action_to_filter_action(decision.action),
+                            original: original.clone(),
+                            filtered,
+                            categories: decision.categories,
+                            coords: items[i].coords.clone(),
+                            url: page_url.clone(),
+                            timestamp_ms: now_ms(),
+                        });
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("[classifier] error (batch): {e}");
+                for (k, text) in to_classify.into_iter().enumerate() {
+                    results[idx_map[k]] = text;
+                }
+            }
+        }
+
+        results
     })
     .await
     .map_err(|e| e.to_string())?;
@@ -232,19 +409,64 @@ async fn filter_texts(
     Ok(result)
 }
 
-/// Aplica blur Gaussiano a los bytes de una imagen y devuelve los bytes JPEG
-/// resultantes via `tauri::ipc::Response` (transporte binario, no JSON / base64).
-/// El JS hace el `fetch(img.src)` localmente (cache hit del browser) y nos pasa
-/// los bytes — eliminamos el segundo network fetch desde Rust.
+/// Decide si una imagen es benigna o de riesgo usando MobileCLIP. Si es
+/// benigna devuelve los bytes originales tal cual; si es de riesgo (o si el
+/// clasificador no está cargado / falla) aplica blur agresivo y devuelve los
+/// bytes JPEG resultantes. La respuesta viaja via `tauri::ipc::Response`
+/// (binario, sin base64) y el JS reemplaza el `src` del `<img>` con el blob.
+///
+/// Política fail-closed: si decode/inferencia revientan, devolvemos imagen
+/// borrosa por seguridad — preferimos un falso positivo a exponer contenido
+/// no clasificado.
 #[tauri::command]
-async fn filter_image_bytes(bytes: Vec<u8>) -> Result<tauri::ipc::Response, String> {
-    let blurred = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
+async fn filter_image_bytes(
+    state: tauri::State<'_, ImageClassifierHolder>,
+    emitter: tauri::State<'_, EventEmitter>,
+    bytes: Vec<u8>,
+    coords: Coords,
+    page_url: String,
+    image_url: String,
+) -> Result<tauri::ipc::Response, String> {
+    let classifier = state.0.clone();
+    let emitter = emitter.inner().clone();
+
+    let result = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
+        // 1. Clasificar. Sin clasificador cargado caemos al comportamiento
+        //    legacy "blur todo" — más conservador que dejar pasar imágenes
+        //    sin filtrar.
+        let decision = match &classifier {
+            Some(c) => c.classify(&bytes).unwrap_or_else(|e| {
+                eprintln!("[image_classifier] error: {e} → bloqueando por seguridad");
+                ImageDecision::Block
+            }),
+            None => ImageDecision::Block,
+        };
+
+        if matches!(decision, ImageDecision::Allow) {
+            // Imagen benigna: pasar los bytes tal cual. El JS reemplaza el
+            // src con el blob → el `__sb_done` queda aplicado y el CSS pre-hide
+            // se levanta. Cero re-encoding, cero pérdida de calidad.
+            return Ok(bytes);
+        }
+
+        // Emite evento al server con la URL de la imagen y la posición.
+        emitter.emit(FilterEvent {
+            id: new_event_id(),
+            kind: FilterKind::Image,
+            action: FilterAction::Block,
+            original: image_url,
+            filtered: String::from("[blurred]"),
+            categories: Vec::new(),
+            coords,
+            url: page_url,
+            timestamp_ms: now_ms(),
+        });
+
+        // 2. Imagen flaggeada: blur agresivo. 128px + sigma 8 es
+        //    ~25x más barato que 512px + sigma 15 y queda irreversiblemente
+        //    borroso a la vista del usuario.
         let img = image::load_from_memory(&bytes).map_err(|e| e.to_string())?;
-        // Downscale agresivo: el CSS aplica un blur de 24px encima hasta que
-        // estos bytes lleguen, así que solo necesitamos algo irreversiblemente
-        // borroso. 128px + sigma 8 es ~25x más barato que 512px + sigma 15.
         let resized = img.resize(128, 128, image::imageops::FilterType::Triangle);
-        // fast_blur es separable Gaussian — ~5x más rápido que blur full-2D.
         let blurred = image::imageops::fast_blur(&resized.to_rgba8(), 8.0);
         let mut out = std::io::Cursor::new(Vec::new());
         image::DynamicImage::ImageRgba8(blurred)
@@ -256,7 +478,7 @@ async fn filter_image_bytes(bytes: Vec<u8>) -> Result<tauri::ipc::Response, Stri
     .await
     .map_err(|e| e.to_string())??;
 
-    Ok(tauri::ipc::Response::new(blurred))
+    Ok(tauri::ipc::Response::new(result))
 }
 
 #[tauri::command]
@@ -278,6 +500,15 @@ async fn close_browser_view(app: AppHandle) -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Carga `.env` (raíz del workspace, gitignored) — SHIELD_AUTH_TOKEN
+    // y opcionalmente SHIELD_SERVER_URL. En mobile no hay filesystem
+    // estándar / cwd estable, así que el `Err` se ignora — allá las vars
+    // viajan vía build script o launch args.
+    let _ = dotenvy::dotenv();
+    // Forza la lectura del token aquí: si falta, queremos crashear al
+    // iniciar con un mensaje claro, no en el primer evento de filtrado.
+    let _ = common::auth_token();
+
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -294,16 +525,16 @@ pub fn run() {
             // `alternative-backend`, que requiere inicializar la `OrtApi` global
             // explícitamente antes de cualquier uso de `ort`.
             #[cfg(target_os = "ios")]
-            classifier_core::init_ort_api();
+            classifier::init_ort_api();
 
             let holder = match try_load_classifier(app) {
                 Ok(c) => {
                     eprintln!("[classifier] cargado");
                     let arc = Arc::new(c);
                     // Comparte la instancia con el plugin nativo (ios_filter.rs)
-                    // vía OnceLock global en classifier-core, así no se duplica
+                    // vía OnceLock global en classifier, así no se duplica
                     // el modelo en memoria ni se reintenta resolver el bundle path.
-                    let _ = classifier_core::SHARED_CLASSIFIER.set(arc.clone());
+                    let _ = classifier::SHARED_CLASSIFIER.set(arc.clone());
                     ClassifierHolder(Some(arc))
                 }
                 Err(e) => {
@@ -312,6 +543,26 @@ pub fn run() {
                 }
             };
             app.manage(holder);
+
+            let img_holder = match try_load_image_classifier(app) {
+                Ok(c) => {
+                    eprintln!("[image_classifier] cargado");
+                    let arc = Arc::new(c);
+                    let _ = classifier::SHARED_IMAGE_CLASSIFIER.set(arc.clone());
+                    ImageClassifierHolder(Some(arc))
+                }
+                Err(e) => {
+                    eprintln!("[image_classifier] desactivado (fallback blur-all): {e}");
+                    ImageClassifierHolder(None)
+                }
+            };
+            app.manage(img_holder);
+
+            // EventEmitter: cliente HTTP que reporta cada decisión != Permitir
+            // al server (Actix). El dashboard hace polling de /events.
+            let emitter = EventEmitter::new();
+            eprintln!("[event-emitter] server: {}", emitter.server_url);
+            app.manage(emitter);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

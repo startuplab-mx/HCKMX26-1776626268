@@ -14,7 +14,7 @@ serde_json = "1"
 thiserror = "1"
 
 # Classifier compartido + bridge Swift→Rust para el filter de textos.
-classifier-core = { path = "../crates/classifier-core" }
+classifier = { path = "../classifier" }
 
 [target."cfg(target_os = \"ios\")".dependencies]
 tauri = { version = "2", features = ["wry"], default-features = false }

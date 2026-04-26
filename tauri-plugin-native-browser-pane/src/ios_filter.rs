@@ -1,7 +1,7 @@
 //! FFI Rust → Swift para que `FilterMessageHandler` (Swift) delegue el
 //! filtrado al classifier zero-shot multi-hipótesis.
 //!
-//! El classifier vive como `OnceLock<Arc<Classifier>>` en classifier-core,
+//! El classifier vive como `OnceLock<Arc<Classifier>>` en classifier,
 //! seteado por la app en su setup hook. Aquí solo lo leemos.
 //!
 //! Critical: TODO el body va dentro de `catch_unwind` para que panics
@@ -12,8 +12,10 @@ use std::collections::HashMap;
 use std::mem::ManuallyDrop;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use classifier_core::{apply_filter_batch, SHARED_CLASSIFIER};
-use swift_rs::SRString;
+use classifier::{
+    apply_filter_batch, ImageDecision, SHARED_CLASSIFIER, SHARED_IMAGE_CLASSIFIER,
+};
+use swift_rs::{SRData, SRString};
 
 /// Limite de seguridad: textos individuales más largos se truncan.
 const MAX_TEXT_LEN: usize = 4000;
@@ -118,6 +120,62 @@ pub extern "C" fn classifier_filter_texts(
             eprintln!("[plugin classifier] PANIC caught at FFI boundary: {msg}");
             // Devolver array vacío evita crashes en JS deserializing.
             SRString::from("[]")
+        }
+    }
+}
+
+/// Análogo a `classifier_filter_texts` pero para imágenes. El handler Swift
+/// (FilterMessageHandler.filterImage) descarga los bytes de la imagen, llama
+/// aquí, y según el veredicto blurea o devuelve la URL original tal cual.
+///
+/// Veredictos posibles (SRString):
+/// - `"allow"`  → MobileCLIP la clasificó como benigna; no aplicar blur.
+/// - `"block"` → cae en una categoría de riesgo; Swift aplica CIGaussianBlur.
+/// - `"none"`  → el modelo no está cargado o decode falló; Swift mantiene
+///                el comportamiento conservador (blur). Mismo contrato que
+///                `filter_image_bytes` en desktop (lib.rs:441-447).
+///
+/// Mismo patrón de seguridad que el path de textos: `ManuallyDrop` para
+/// evitar double-release del SR type owned por Swift ARC, y `catch_unwind`
+/// para que un panic en `image::load_from_memory` o en ORT no cruce el
+/// boundary FFI (UB → SIGABRT).
+#[no_mangle]
+pub extern "C" fn classifier_classify_image_bytes(bytes: SRData) -> SRString {
+    let bytes = ManuallyDrop::new(bytes);
+
+    let result = catch_unwind(AssertUnwindSafe(|| -> &'static str {
+        let classifier = match SHARED_IMAGE_CLASSIFIER.get() {
+            Some(c) => c,
+            None => {
+                eprintln!("[plugin image_classifier] SHARED no inicializado, fail-closed");
+                return "none";
+            }
+        };
+
+        match classifier.classify(bytes.as_slice()) {
+            Ok(ImageDecision::Allow) => "allow",
+            Ok(ImageDecision::Block) => "block",
+            Err(e) => {
+                eprintln!("[plugin image_classifier] classify error: {e}");
+                "none"
+            }
+        }
+    }));
+
+    match result {
+        Ok(verdict) => SRString::from(verdict),
+        Err(panic_info) => {
+            let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                (*s).to_string()
+            } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "<unknown payload>".to_string()
+            };
+            eprintln!(
+                "[plugin image_classifier] PANIC caught at FFI boundary: {msg}"
+            );
+            SRString::from("none")
         }
     }
 }

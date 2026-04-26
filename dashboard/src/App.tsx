@@ -2,23 +2,22 @@ import { useState, type ReactNode } from "react";
 import "./App.css";
 import { Header } from "./components/Header";
 import { Sidebar } from "./components/Sidebar";
-import { OverviewPage } from "./pages/OverviewPage";
+import { FilteredEventsPage } from "./pages/FilteredEventsPage";
 import { PlaceholderPage } from "./pages/PlaceholderPage";
-import { useIncidents } from "./data/hooks";
+import { useFilterEvents } from "./events";
 import { T } from "./theme";
 import type { PageId } from "./types";
 
-const PAGES: Record<PageId, ReactNode> = {
-  overview: <OverviewPage />,
-  incidents: <PlaceholderPage title="Gestión de Eventos" icon="alert" />,
-  settings: <PlaceholderPage title="Configuración del Sistema" icon="settings" />,
-};
-
 function App() {
-  const [page, setPage] = useState<PageId>("overview");
-  const incidents = useIncidents();
-  const criticalCount =
-    incidents.data?.filter((i) => i.risk === "CRÍTICO").length ?? 0;
+  const [page, setPage] = useState<PageId>("incidents");
+  const { events } = useFilterEvents();
+  const criticalCount = events.filter((e) => e.action === "block").length;
+
+  const PAGES: Record<PageId, ReactNode> = {
+    overview: <PlaceholderPage title="Overview" icon="home" />,
+    incidents: <FilteredEventsPage />,
+    settings: <PlaceholderPage title="Configuración del Sistema" icon="settings" />,
+  };
 
   return (
     <div

@@ -1,4 +1,0 @@
-module SwiftRs {
-    header "/Users/albertovelazquez/Documents/Github/hackathon404/tauri-plugin-native-browser-pane/ios/.build/arm64-apple-macosx/debug/SwiftRs.build/SwiftRs-Swift.h"
-    requires objc
-}

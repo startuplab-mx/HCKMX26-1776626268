@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { ArrowLeft, Loader2, Search } from "lucide-react";
 import AppShell from "../components/AppShell";
+import { getBrowserOwner, setBrowserOwner } from "../browserPane";
 
 export default function Navegador() {
   const [inputUrl, setInputUrl] = useState("");
@@ -23,6 +24,7 @@ export default function Navegador() {
       // ignore
     }
     hasViewRef.current = false;
+    if (getBrowserOwner() === "navegador") setBrowserOwner(null);
     routerNavigate("/");
   }, [routerNavigate]);
 
@@ -88,6 +90,7 @@ export default function Navegador() {
   useEffect(() => {
     return () => {
       invoke("close_browser_view").catch(() => {});
+      if (getBrowserOwner() === "navegador") setBrowserOwner(null);
     };
   }, []);
 
@@ -99,6 +102,18 @@ export default function Navegador() {
       setNavError(null);
       try {
         if (!hasViewRef.current) {
+          // Si otra página (Facebook / Instagram) dejó su WebView oculto,
+          // ciérralo antes para que su contenido no aparezca brevemente
+          // en nuestros bounds mientras carga la URL solicitada.
+          const prev = getBrowserOwner();
+          if (prev !== null && prev !== "navegador") {
+            try {
+              await invoke("close_browser_view");
+            } catch (_) {
+              // ignore
+            }
+            setBrowserOwner(null);
+          }
           const r = paneRef.current?.getBoundingClientRect();
           await invoke("open_browser_view", {
             url,
@@ -109,8 +124,10 @@ export default function Navegador() {
           });
           hasViewRef.current = true;
           setHasView(true);
+          setBrowserOwner("navegador");
         } else {
           await invoke("navigate_browser_view", { url });
+          setBrowserOwner("navegador");
         }
         setInputUrl(url);
         // Re-sincronizar bounds tras la creación / navegación. El webview

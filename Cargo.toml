@@ -4,5 +4,7 @@ members = [
     "app/src-tauri",
     "dashboard/src-tauri",
     "tauri-plugin-native-browser-pane",
-    "crates/classifier-core",
+    "classifier",
+    "common",
+    "server",
 ]

@@ -1,13 +1,13 @@
 //! Build script:
 //!
-//! 1. **runtime.json**: regenera desde `classifier/.env`.
-//! 2. **Modelo**: hardlink-ea cada archivo de `classifier/onnx_model/` →
+//! 1. **runtime.json**: regenera desde `classifier-py/.env`.
+//! 2. **Modelo**: hardlink-ea cada archivo de `classifier-py/onnx_model/` →
 //!    `app/src-tauri/resources/onnx_model/*`.
 //! 3. **iOS link**: descarga onnxruntime.xcframework (~30 MB) si falta,
 //!    extrae el slice del target con `lipo -thin`, y emite los
 //!    `cargo:rustc-link-*` para enlazar libonnxruntime.a estáticamente.
 //!    Reemplaza al antiguo `scripts/setup.sh` + override en
-//!    `.cargo/config.toml`. Funciona porque `classifier-core` activa la
+//!    `.cargo/config.toml`. Funciona porque `classifier` activa la
 //!    feature `alternative-backend` de `ort` en iOS (deshabilita el linking
 //!    automático de `ort-sys`), y `lib.rs` llama a `init_ort_api()` al startup.
 
@@ -23,6 +23,7 @@ fn main() {
     }
 
     sync_model_resources(&manifest);
+    sync_mobileclip_resources(&manifest);
 
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     if target_os == "ios" {
@@ -168,10 +169,10 @@ fn needs_relipo(src: &Path, dst: &Path) -> bool {
 fn generate_runtime_json(manifest: &Path) -> Result<(), String> {
     use serde_json::{json, Value};
 
-    let env_path = manifest.join("../../classifier/.env");
+    let env_path = manifest.join("../../classifier-py/.env");
     let env_path = env_path
         .canonicalize()
-        .map_err(|_| format!("classifier/.env no encontrado en {}", env_path.display()))?;
+        .map_err(|_| format!("classifier-py/.env no encontrado en {}", env_path.display()))?;
 
     println!("cargo:rerun-if-changed={}", env_path.display());
 
@@ -270,7 +271,7 @@ fn parse_dotenv_simple(
 // ----------------------------------------------------------------------------
 
 fn sync_model_resources(manifest: &Path) {
-    let src_dir = manifest.join("../../classifier/onnx_model");
+    let src_dir = manifest.join("../../classifier-py/onnx_model");
     let dst_dir = manifest.join("resources/onnx_model");
 
     let _ = std::fs::create_dir_all(&dst_dir);
@@ -281,13 +282,80 @@ fn sync_model_resources(manifest: &Path) {
             let _ = std::fs::write(
                 &placeholder,
                 "# El modelo no se ha exportado todavia.\n\
-                 # Corre: cd classifier && uv run --extra export python src/export.py\n"
+                 # Corre: cd classifier-py && uv run --extra export python src/export.py\n"
                     .as_bytes(),
             );
         }
         println!(
-            "cargo:warning=classifier/onnx_model/ no existe — corriendo en passthrough. \
-             Corre: cd classifier && uv run --extra export python src/export.py"
+            "cargo:warning=classifier-py/onnx_model/ no existe — corriendo en passthrough. \
+             Corre: cd classifier-py && uv run --extra export python src/export.py"
+        );
+        return;
+    }
+
+    println!("cargo:rerun-if-changed={}", src_dir.display());
+
+    let entries = match std::fs::read_dir(&src_dir) {
+        Ok(e) => e,
+        Err(e) => {
+            println!("cargo:warning=read_dir({}) falló: {e}", src_dir.display());
+            return;
+        }
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let dst = dst_dir.join(entry.file_name());
+
+        if dst.exists() {
+            if same_inode(&path, &dst).unwrap_or(false) {
+                continue;
+            }
+            let _ = std::fs::remove_file(&dst);
+        }
+
+        if std::fs::hard_link(&path, &dst).is_err() {
+            if let Err(e) = std::fs::copy(&path, &dst) {
+                println!(
+                    "cargo:warning=no se pudo linkear ni copiar {} → {}: {e}",
+                    path.display(),
+                    dst.display()
+                );
+            }
+        }
+    }
+
+    let placeholder = dst_dir.join(".no-model");
+    if placeholder.exists() {
+        let _ = std::fs::remove_file(&placeholder);
+    }
+}
+
+/// Sincroniza los artefactos del clasificador de imágenes MobileCLIP desde
+/// `nsfw-py/mobileclip/` a `app/src-tauri/resources/mobileclip/`. Mismo patrón
+/// que `sync_model_resources` (hardlink primero, copy como fallback).
+fn sync_mobileclip_resources(manifest: &Path) {
+    let src_dir = manifest.join("../../nsfw-py/mobileclip");
+    let dst_dir = manifest.join("resources/mobileclip");
+
+    let _ = std::fs::create_dir_all(&dst_dir);
+
+    if !src_dir.exists() {
+        let placeholder = dst_dir.join(".no-model");
+        if !placeholder.exists() {
+            let _ = std::fs::write(
+                &placeholder,
+                "# El image classifier no se ha exportado todavia.\n\
+                 # Corre: cd nsfw-py && uv sync && uv run python src/export.py\n"
+                    .as_bytes(),
+            );
+        }
+        println!(
+            "cargo:warning=nsfw-py/mobileclip/ no existe — el filtro de imágenes caerá \
+             a blur-all. Corre: cd nsfw-py && uv sync && uv run python src/export.py"
         );
         return;
     }

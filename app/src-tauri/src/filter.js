@@ -2,11 +2,13 @@
 // Corre antes que cualquier script de la página gracias a `initialization_script`
 // (desktop) o `WKUserScript`/`evaluateJavascript` at-document-start (mobile).
 //
-// v2 — performance pass:
+// v3 — selective blur:
 //   - Imagen: el JS hace fetch (cache hit del browser) y manda los bytes raw
-//     vía `invoke('filter_image_bytes', { bytes: Uint8Array })`. Rust devuelve
-//     bytes JPEG via `tauri::ipc::Response`. Cero base64, cero double-download.
-//     En mobile (sin __TAURI_INTERNALS__) cae a la API URL legacy.
+//     vía `invoke('filter_image_bytes', { bytes: Uint8Array })`. Rust corre
+//     MobileCLIP-S1 (zero-shot) y devuelve los bytes ORIGINALES si la imagen
+//     es benigna o bytes JPEG borrosos si entra en una categoría de riesgo.
+//     Cero base64, cero double-download. En mobile (sin __TAURI_INTERNALS__)
+//     cae a la API URL legacy con blur incondicional.
 //   - Texto: se procesan en batch — un solo invoke por scan. De N IPCs a 1.
 //   - Imágenes off-screen quedan con CSS blur (instant, gratis) y se procesan
 //     vía IntersectionObserver al entrar al viewport.
@@ -85,11 +87,17 @@
 
   // ---------- 3. Bridges multiplataforma ----------
 
-  // TEXTO BATCHED — desktop: invoke nativo. Mobile: bridge nativo (filterTexts).
-  function callFilterTexts(texts) {
+  // TEXTO BATCHED — desktop: invoke nativo con items{text,coords}+pageUrl.
+  // Mobile: bridge nativo (filterTexts) sigue con array de strings, sin
+  // coordenadas, hasta que se implemente el reporte de eventos en mobile.
+  function callFilterTexts(items, pageUrl) {
+    var texts = items.map(function (it) { return it.text; });
     try {
       if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {
-        return window.__TAURI_INTERNALS__.invoke("filter_texts", { texts: texts });
+        return window.__TAURI_INTERNALS__.invoke("filter_texts", {
+          items: items,
+          pageUrl: pageUrl,
+        });
       }
       if (
         window.webkit &&
@@ -163,11 +171,43 @@
     });
   }
 
+  // ---------- 4.5 Helpers de coordenadas (CSS px relativos al viewport) ----------
+  // El dashboard usa esto para ubicar visualmente los eventos de filtrado.
+  function rectToCoords(r) {
+    return {
+      x: Math.round(r.left || 0),
+      y: Math.round(r.top || 0),
+      width: Math.round(r.width || 0),
+      height: Math.round(r.height || 0),
+    };
+  }
+  function elementCoords(el) {
+    try {
+      if (!el || !el.getBoundingClientRect) return { x: 0, y: 0, width: 0, height: 0 };
+      return rectToCoords(el.getBoundingClientRect());
+    } catch (_) {
+      return { x: 0, y: 0, width: 0, height: 0 };
+    }
+  }
+  function textNodeCoords(node) {
+    // Range cubre el text node real — más preciso que el bounding del padre
+    // (que puede contener varios hermanos).
+    try {
+      var rng = document.createRange();
+      rng.selectNodeContents(node);
+      var r = rng.getBoundingClientRect();
+      rng.detach && rng.detach();
+      if (r && (r.width || r.height)) return rectToCoords(r);
+    } catch (_) {}
+    return elementCoords(node.parentElement);
+  }
+
   // ---------- 5. Procesamiento de imagen ----------
   function reveal(el) { el.classList.add("__sb_done"); }
 
   // Path desktop: fetch del browser (cache hit) → bytes raw → invoke binario →
-  // bytes blurred → blob URL.
+  // bytes blurred → blob URL. Manda coords + URL para reportar el evento al
+  // server / dashboard.
   async function processImgDesktop(img, src) {
     if (imageCache[src]) {
       var cached = await imageCache[src];
@@ -177,6 +217,11 @@
       }
       return;
     }
+    // Snap coords antes del await — la imagen puede haberse movido cuando
+    // el invoke regrese.
+    var coords = elementCoords(img);
+    var pageUrl = location.href || "";
+
     var promise = enqueueImageJob(async function () {
       var r;
       try {
@@ -189,7 +234,7 @@
       var u8 = new Uint8Array(buf);
       var blurredResp = await window.__TAURI_INTERNALS__.invoke(
         "filter_image_bytes",
-        { bytes: u8 }
+        { bytes: u8, coords: coords, pageUrl: pageUrl, imageUrl: src }
       );
       // Tauri 2 entrega Response como ArrayBuffer (o Uint8Array, según versión).
       var blob = new Blob([blurredResp], { type: "image/jpeg" });
@@ -416,10 +461,17 @@
     for (var start = 0; start < candidates.length; start += STREAM_CHUNK) {
       var slice = candidates.slice(start, start + STREAM_CHUNK);
       var sliceTexts = [];
-      for (var c = 0; c < slice.length; c++) sliceTexts.push(slice[c].nodeValue);
+      var sliceItems = [];
+      for (var c = 0; c < slice.length; c++) {
+        sliceTexts.push(slice[c].nodeValue);
+        sliceItems.push({
+          text: slice[c].nodeValue,
+          coords: textNodeCoords(slice[c]),
+        });
+      }
 
       try {
-        var out = await callFilterTexts(sliceTexts);
+        var out = await callFilterTexts(sliceItems, location.href || "");
         for (var k = 0; k < slice.length; k++) {
           var v = (out && out[k] != null) ? out[k] : sliceTexts[k];
           try { slice[k].nodeValue = v; } catch (_) {}

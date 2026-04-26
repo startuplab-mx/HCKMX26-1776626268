@@ -55,7 +55,7 @@ shield/
 │   └── src-tauri/     # Backend Rust (filtros, WebView nativo)
 │       ├── lib.rs     # Comandos IPC: open/navigate/close WebView, filter_texts, filter_image_bytes
 │       └── filter.js  # Script JS inyectado en cada WebView (~15KB)
-├── classifier/        # Clasificador de IA (Python)
+├── classifier-py/     # Clasificador de IA (Python — exporta el modelo ONNX)
 │   ├── main.py        # Pipeline NLI zero-shot con atajos léxicos
 │   └── .env.example   # Configuración de categorías, hipótesis y umbrales
 └── dashboard/         # Panel de control parental (Tauri + React)
@@ -107,7 +107,7 @@ bun run tauri ios dev
 ### 2. Clasificador de IA
 
 ```bash
-cd hackathon404/classifier
+cd hackathon404/classifier-py
 
 # Copiar y editar configuración
 cp .env.example .env

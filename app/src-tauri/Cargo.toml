@@ -34,5 +34,9 @@ rand = "0.8"
 tauri-plugin-native-browser-pane = { path = "../../tauri-plugin-native-browser-pane" }
 
 # Shared classifier crate (ort + tokenizers + lexical + multi-label decision).
-classifier-core = { path = "../../crates/classifier-core" }
+classifier = { path = "../../classifier" }
+# Tipos y constante de token compartidos con el server y dashboard.
+common = { path = "../../common" }
+# Carga el .env (gitignored) con SHIELD_AUTH_TOKEN al startup.
+dotenvy = "0.15"
 anyhow = "1.0"

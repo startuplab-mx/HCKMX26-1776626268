@@ -17,6 +17,15 @@ import WebKit
 @_silgen_name("classifier_filter_texts")
 func classifier_filter_texts(_ bundlePath: SRString, _ textsJson: SRString) -> SRString
 
+// Rust FFI: clasifica una imagen (bytes) con MobileCLIP-S1 zero-shot.
+// Implementado en `tauri-plugin-native-browser-pane/src/ios_filter.rs`.
+// Devuelve "allow", "block", o "none" (modelo no cargado / decode falló).
+// El handler Swift decide blurear o passthrough con base en el veredicto;
+// la inferencia y el preprocess viven en Rust para compartir lógica con el
+// path desktop (`filter_image_bytes` en app/src-tauri/src/lib.rs).
+@_silgen_name("classifier_classify_image_bytes")
+func classifier_classify_image_bytes(_ bytes: SRData) -> SRString
+
 class OpenArgs: Decodable {
   let url: String
   let x: Double
@@ -504,9 +513,15 @@ class FilterMessageHandler: NSObject, WKScriptMessageHandlerWithReply {
     return resultArr
   }
 
-  /// Baja la imagen, aplica Gaussian blur (CIFilter), encoda como JPEG y
-  /// devuelve el data URL via completion. En caso de error devuelve el URL
-  /// original. Puede invocar `completion` desde cualquier thread; el caller
+  /// Baja la imagen, la pasa por el classifier MobileCLIP en Rust, y según
+  /// el veredicto: (a) "allow" → devuelve el URL original (el WebView ya
+  /// tiene los bytes cacheados, JS detecta out===src y solo levanta el
+  /// CSS pre-hide), (b) "block"/"none" → aplica CIGaussianBlur y devuelve
+  /// data URL JPEG. Veredicto "none" cubre tanto modelo no cargado como
+  /// decode error: fail-closed (blur) por seguridad, mismo contrato que
+  /// `filter_image_bytes` en desktop.
+  ///
+  /// Completion puede invocarse desde cualquier thread; el caller
   /// (WKScriptMessageHandlerWithReply) acepta replies desde cualquier queue.
   static func filterImage(_ urlString: String, completion: @escaping (String) -> Void) {
     guard let url = URL(string: urlString) else {
@@ -521,8 +536,20 @@ class FilterMessageHandler: NSObject, WKScriptMessageHandlerWithReply {
       // Salir del callback del URLSession antes de hacer trabajo CPU pesado:
       // la queue interna del URLSession es compartida con otros downloads.
       FilterMessageHandler.workQueue.async {
-        let result = FilterMessageHandler.blurImageData(data) ?? urlString
-        completion(result)
+        let srData = SRData([UInt8](data))
+        let verdict = classifier_classify_image_bytes(srData).toString()
+        switch verdict {
+        case "allow":
+          // Imagen benigna: devolver el URL original tal cual. El WebView
+          // ya tiene los bytes cacheados — no hay re-fetch.
+          completion(urlString)
+        default:
+          // "block" o "none" (modelo no cargado / decode falló) →
+          // fail-closed: aplicamos blur. Mismo comportamiento conservador
+          // que `filter_image_bytes` desktop cuando el classifier es None.
+          let result = FilterMessageHandler.blurImageData(data) ?? urlString
+          completion(result)
+        }
       }
     }
     task.resume()

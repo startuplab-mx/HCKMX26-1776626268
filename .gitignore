@@ -121,6 +121,7 @@ venv.bak/
 
 # ---- ML resources (auto-populated by build.rs) ----
 app/src-tauri/resources/onnx_model/
+app/src-tauri/resources/mobileclip/
 # runtime.json contiene las hipótesis sensibles (OPSEC)
 app/src-tauri/resources/runtime.json
 # ort static lib path varies per machine (see scripts/setup.sh)

@@ -1,0 +1,18 @@
+[project]
+name = "nsfw-py"
+version = "0.1.0"
+description = "Export MobileCLIP-S1 image encoder + zero-shot text anchors a ONNX para el runtime Rust de Shield"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "torch>=2.2",
+    "torchvision>=0.17",
+    "huggingface-hub>=0.24",
+    "numpy>=1.26",
+    "onnx>=1.16",
+    "mobileclip",
+    "pillow>=10.0",
+]
+
+[tool.uv.sources]
+mobileclip = { git = "https://github.com/apple/ml-mobileclip.git" }
