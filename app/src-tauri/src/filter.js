@@ -319,11 +319,27 @@
   try { LETTER_SEQ = new RegExp("\\p{L}{4,}", "u"); }
   catch (_) { LETTER_SEQ = /[A-Za-zÀ-ɏ]{4,}/; }
 
+  // URL / dominio + path: cosas como "www.meta.com/es-la/facebook-app/" o
+  // "play.google.com/store/apps/details?id=com.facebook." dominaban el
+  // input al clasificador en navegación tipo DDG/Google. Nunca son
+  // conversación y al modelo NLI le confunden mucho (suben los scores en
+  // todas las cats por compartir vocabulario).
+  var URL_PREFIX = /^\s*(https?:\/\/|www\.)/i;
+  var DOMAIN_PATH = /\b[\w-]+\.(com|mx|es|org|net|io|app|co|gov|edu|info|wiki(pedia)?\.org)\b\/[\w\-./?=&%#+]*/i;
+
   function isContentText(text) {
     if (!text) return false;
     var trimmed = text.replace(/^\s+|\s+$/g, "");
     if (trimmed.length < 8) return false;
     if (!LETTER_SEQ.test(trimmed)) return false;
+    if (URL_PREFIX.test(trimmed)) return false;
+    // Si el trimmed es predominantemente "domain.tld/path", es navegación.
+    if (DOMAIN_PATH.test(trimmed)) {
+      var letters = (trimmed.match(/[A-Za-zÀ-ɏÀ-ɏ一-鿿]/g) || []).length;
+      var sep = (trimmed.match(/[./?&=#]/g) || []).length;
+      // Heurística: muchos separadores vs letras → URL/path con ruido.
+      if (sep * 6 >= letters) return false;
+    }
     return true;
   }
 
@@ -377,31 +393,79 @@
       return;
     }
 
-    var texts = [];
-    for (var c = 0; c < candidates.length; c++) texts.push(candidates[c].nodeValue);
+    // Streaming chunks: trocea candidates en grupos pequeños y aplica los
+    // resultados al DOM por cada chunk completado. El usuario ve la página
+    // ir limpiándose progresivamente (cada ~1-2 s) en vez de un bloqueo
+    // monolítico de 15-20 s al final del batch grande.
+    var STREAM_CHUNK = 10;
 
-    try {
-      var out = await callFilterTexts(texts);
-      for (var k = 0; k < candidates.length; k++) {
-        var v = (out && out[k] != null) ? out[k] : texts[k];
-        try { candidates[k].nodeValue = v; } catch (_) {}
-        processedTextNodes.add(candidates[k]);
+    function revealAncestorBlock(node) {
+      var p = node.parentNode;
+      while (p && p.nodeType === 1) {
+        var tag = p.tagName;
+        if (tag === "P" || (tag && tag.length === 2 && tag.charAt(0) === "H" &&
+            tag.charAt(1) >= "1" && tag.charAt(1) <= "6")) {
+          reveal(p);
+          return;
+        }
+        if (tag === "BODY") return;
+        p = p.parentNode;
       }
-    } catch (_) {
-      for (var m = 0; m < candidates.length; m++) processedTextNodes.add(candidates[m]);
     }
+
+    for (var start = 0; start < candidates.length; start += STREAM_CHUNK) {
+      var slice = candidates.slice(start, start + STREAM_CHUNK);
+      var sliceTexts = [];
+      for (var c = 0; c < slice.length; c++) sliceTexts.push(slice[c].nodeValue);
+
+      try {
+        var out = await callFilterTexts(sliceTexts);
+        for (var k = 0; k < slice.length; k++) {
+          var v = (out && out[k] != null) ? out[k] : sliceTexts[k];
+          try { slice[k].nodeValue = v; } catch (_) {}
+          processedTextNodes.add(slice[k]);
+          // Revelar el bloque padre apenas tenemos su texto filtrado, en vez
+          // de esperar al final del scan completo.
+          revealAncestorBlock(slice[k]);
+        }
+      } catch (_) {
+        for (var m = 0; m < slice.length; m++) processedTextNodes.add(slice[m]);
+      }
+    }
+    // Limpieza final: cualquier p/h1-h6 que no haya tenido text node candidato
+    // (vacío, solo punctuación, etc.) sigue transparente — revelarlo.
     for (var rv = 0; rv < revealEls.length; rv++) reveal(revealEls[rv]);
   }
 
-  // Debounce de scans para mutaciones agrupadas (SPAs).
-  var scanScheduled = false;
+  // Debounce + lock anti-concurrente. Mientras un scan corre, los triggers
+  // adicionales solo marcan `scanDirty`; al terminar se vuelve a agendar UN
+  // scan. Garantiza ≤1 scanRoot a la vez (filtra el ruido de SPAs como
+  // Telegram Web que mutan en ráfagas y antes generaban 4 batches paralelos).
+  var scanTimer = null;
+  var scanRunning = false;
+  var scanDirty = false;
+  var SCAN_DEBOUNCE_MS = 150;
+
   function scheduleScan() {
-    if (scanScheduled) return;
-    scanScheduled = true;
-    setTimeout(function () {
-      scanScheduled = false;
-      scanRoot(document.body || document.documentElement);
-    }, 50);
+    if (scanRunning) {
+      scanDirty = true;
+      return;
+    }
+    if (scanTimer != null) clearTimeout(scanTimer);
+    scanTimer = setTimeout(runScan, SCAN_DEBOUNCE_MS);
+  }
+
+  async function runScan() {
+    scanTimer = null;
+    scanRunning = true;
+    scanDirty = false;
+    try {
+      await scanRoot(document.body || document.documentElement);
+    } catch (_) {
+    } finally {
+      scanRunning = false;
+      if (scanDirty) scheduleScan();
+    }
   }
 
   // ---------- 8. Cleanup blob URLs en pagehide ----------
@@ -416,7 +480,7 @@
   function onReady() {
     if (!checkText()) return;
 
-    scanRoot(document.body);
+    scheduleScan();
 
     try {
       var contentObs = new MutationObserver(function (muts) {

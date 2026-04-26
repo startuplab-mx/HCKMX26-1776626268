@@ -1,0 +1,4 @@
+module Tauri {
+    header "/Users/albertovelazquez/Documents/Github/hackathon404/tauri-plugin-native-browser-pane/ios/.build/arm64-apple-macosx/debug/Tauri.build/Tauri-Swift.h"
+    requires objc
+}

@@ -40,7 +40,7 @@ pub fn decidir(
 
     for (cat, score) in scores {
         let th = *thresholds.get(cat).unwrap_or(&0.70);
-        if *score >= th + 0.10 {
+        if *score >= th + 0.15 {
             bloqueadas.push(cat.clone());
         } else if *score >= th {
             avisadas.push(cat.clone());

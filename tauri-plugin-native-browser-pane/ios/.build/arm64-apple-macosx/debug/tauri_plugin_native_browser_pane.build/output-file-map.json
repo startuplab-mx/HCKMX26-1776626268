@@ -1,0 +1,11 @@
+{
+  "": {
+    "swift-dependencies": "/Users/albertovelazquez/Documents/Github/hackathon404/tauri-plugin-native-browser-pane/ios/.build/arm64-apple-macosx/debug/tauri_plugin_native_browser_pane.build/master.swiftdeps"
+  },
+  "/Users/albertovelazquez/Documents/Github/hackathon404/tauri-plugin-native-browser-pane/ios/Sources/NativeBrowserPanePlugin.swift": {
+    "dependencies": "/Users/albertovelazquez/Documents/Github/hackathon404/tauri-plugin-native-browser-pane/ios/.build/arm64-apple-macosx/debug/tauri_plugin_native_browser_pane.build/NativeBrowserPanePlugin.d",
+    "object": "/Users/albertovelazquez/Documents/Github/hackathon404/tauri-plugin-native-browser-pane/ios/.build/arm64-apple-macosx/debug/tauri_plugin_native_browser_pane.build/NativeBrowserPanePlugin.swift.o",
+    "swiftmodule": "/Users/albertovelazquez/Documents/Github/hackathon404/tauri-plugin-native-browser-pane/ios/.build/arm64-apple-macosx/debug/tauri_plugin_native_browser_pane.build/NativeBrowserPanePlugin~partial.swiftmodule",
+    "swift-dependencies": "/Users/albertovelazquez/Documents/Github/hackathon404/tauri-plugin-native-browser-pane/ios/.build/arm64-apple-macosx/debug/tauri_plugin_native_browser_pane.build/NativeBrowserPanePlugin.swiftdeps"
+  }
+}

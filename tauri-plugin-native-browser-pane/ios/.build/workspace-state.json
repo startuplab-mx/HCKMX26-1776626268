@@ -1,0 +1,41 @@
+{
+  "object" : {
+    "artifacts" : [
+
+    ],
+    "dependencies" : [
+      {
+        "basedOn" : null,
+        "packageRef" : {
+          "identity" : "swift-rs",
+          "kind" : "remoteSourceControl",
+          "location" : "https://github.com/Brendonovich/swift-rs",
+          "name" : "SwiftRs"
+        },
+        "state" : {
+          "checkoutState" : {
+            "revision" : "f64a4514de07f450ec5b6aa297624cd3479d9579",
+            "version" : "1.0.7"
+          },
+          "name" : "sourceControlCheckout"
+        },
+        "subpath" : "swift-rs"
+      },
+      {
+        "basedOn" : null,
+        "packageRef" : {
+          "identity" : "tauri-api",
+          "kind" : "fileSystem",
+          "location" : "/Users/albertovelazquez/Documents/Github/hackathon404/tauri-plugin-native-browser-pane/.tauri/tauri-api",
+          "name" : "tauri-api"
+        },
+        "state" : {
+          "name" : "fileSystem",
+          "path" : "/Users/albertovelazquez/Documents/Github/hackathon404/tauri-plugin-native-browser-pane/.tauri/tauri-api"
+        },
+        "subpath" : "tauri-api"
+      }
+    ]
+  },
+  "version" : 6
+}

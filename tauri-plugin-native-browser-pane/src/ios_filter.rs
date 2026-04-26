@@ -8,6 +8,7 @@
 //! no crucen el boundary FFI (UB → app abort). Si algo revienta, log y
 //! passthrough.
 
+use std::collections::HashMap;
 use std::mem::ManuallyDrop;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
@@ -16,13 +17,13 @@ use swift_rs::SRString;
 
 /// Limite de seguridad: textos individuales más largos se truncan.
 const MAX_TEXT_LEN: usize = 4000;
-/// Tamaño de chunk para procesar el batch en porciones. El `Session` de ort
-/// está detrás de un `Mutex` (nli.rs), así que toda inferencia ya está
-/// serializada — chunkear no agrega trabajo, solo divide la cola para acotar
-/// el peor-caso de memoria por iteración (~64 × MAX_TEXT_LEN × 12 hipótesis ×
-/// 256 tokens). Procesa el batch completo en N/CHUNK_SIZE pasadas, sin
-/// descartar inputs.
-const CHUNK_SIZE: usize = 64;
+/// Tamaño de chunk para procesar el batch en porciones. Más chico = más
+/// rápido el primer resultado visible al DOM (UX percibida), aunque la
+/// latencia total agregada es similar (mDeBERTa CPU ~50-100 ms por par).
+/// 12 textos × ~13 hipótesis = ~156 pares por session.run() ≈ 1-2 s en
+/// device — punto dulce para que el JS pueda hacer streaming visible cada
+/// llamada FFI.
+const CHUNK_SIZE: usize = 12;
 
 #[no_mangle]
 pub extern "C" fn classifier_filter_texts(
@@ -53,26 +54,47 @@ pub extern "C" fn classifier_filter_texts(
             }
         }
 
+        // Dedup intra-batch antes de cruzar al clasificador. SPAs como
+        // Telegram repiten "@username", botones, fechas, etc. en muchos nodos
+        // del DOM dentro de un mismo scan. Clasificar solo el conjunto único
+        // y reconstituir el array de salida en el orden original.
+        let mut unique: Vec<String> = Vec::with_capacity(inputs.len());
+        let mut map: Vec<usize> = Vec::with_capacity(inputs.len());
+        let mut seen: HashMap<String, usize> = HashMap::with_capacity(inputs.len());
+        for t in inputs.iter() {
+            if let Some(&i) = seen.get(t) {
+                map.push(i);
+            } else {
+                let i = unique.len();
+                seen.insert(t.clone(), i);
+                unique.push(t.clone());
+                map.push(i);
+            }
+        }
+
         eprintln!(
-            "[plugin classifier] processing {} texts in chunks of {}",
+            "[plugin classifier] processing {} texts ({} unique) in chunks of {}",
             inputs.len(),
+            unique.len(),
             CHUNK_SIZE
         );
 
         let outputs = match SHARED_CLASSIFIER.get() {
             Some(classifier) => {
-                let mut all_out = Vec::with_capacity(inputs.len());
-                for (i, chunk) in inputs.chunks(CHUNK_SIZE).enumerate() {
-                    eprintln!("[plugin classifier] chunk {} ({} texts)", i, chunk.len());
+                let mut unique_out: Vec<String> = Vec::with_capacity(unique.len());
+                for chunk in unique.chunks(CHUNK_SIZE) {
                     let out = apply_filter_batch(classifier, chunk);
-                    all_out.extend(out);
+                    unique_out.extend(out);
                 }
+                let expanded: Vec<String> =
+                    map.iter().map(|&i| unique_out[i].clone()).collect();
                 eprintln!(
-                    "[plugin classifier] done: {}/{} outputs",
-                    all_out.len(),
-                    inputs.len()
+                    "[plugin classifier] done: {}/{} outputs (classified {} unique)",
+                    expanded.len(),
+                    inputs.len(),
+                    unique.len()
                 );
-                all_out
+                expanded
             }
             None => {
                 eprintln!("[plugin classifier] SHARED no inicializado, passthrough");

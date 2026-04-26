@@ -37,6 +37,13 @@ def load_config() -> dict:
         return v
 
     keys = json.loads(_require("CATEGORY_KEYS"))
+
+    raw_neutrals = os.environ.get("NEUTRAL_HYPOTHESES")
+    if raw_neutrals:
+        neutral_hypotheses = json.loads(raw_neutrals)
+    else:
+        neutral_hypotheses = [_require("NEUTRAL_HYPOTHESIS")]
+
     return {
         "model_id": _require("NLI_MODEL"),
         "category_keys": keys,
@@ -44,7 +51,7 @@ def load_config() -> dict:
         "lexical": {k: json.loads(_require(f"LEXICAL_{k.upper()}")) for k in keys},
         "thresholds": json.loads(_require("THRESHOLDS")),
         "test_cases": json.loads(_require("TEST_CASES")),
-        "neutral_hypothesis": _require("NEUTRAL_HYPOTHESIS"),
+        "neutral_hypotheses": neutral_hypotheses,
         "context_test_cases": json.loads(os.environ.get("CONTEXT_TEST_CASES", "[]")),
     }
 
@@ -73,8 +80,8 @@ def contar_matches(texto: str, patrones: dict) -> int:
 
 def make_clasificar(clf, cfg: dict):
     all_hypotheses = [h for cat in cfg["category_keys"] for h in cfg["hypotheses"][cat]]
-    neutral = cfg["neutral_hypothesis"]
-    candidates = all_hypotheses + [neutral]
+    neutrals = cfg["neutral_hypotheses"]
+    candidates = all_hypotheses + neutrals
 
     def clasificar(texto: str, contexto: list[str] | None = None) -> dict:
         if contexto:
@@ -97,7 +104,9 @@ def make_clasificar(clf, cfg: dict):
             hypothesis_template="{}",
         )
         score_por_hyp = dict(zip(out["labels"], out["scores"]))
-        score_neutral = score_por_hyp[neutral]
+        # Mejor ancla inocua: la neutral con score más alto. Si "publicidad de
+        # producto" gana, la categoría sospechosa cae a 0 tras el margen.
+        score_neutral = max(score_por_hyp[h] for h in neutrals)
 
         resultado = {}
         for cat in cfg["category_keys"]:

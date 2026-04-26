@@ -36,7 +36,14 @@ pub struct RuntimeConfig {
     pub category_keys: Vec<String>,
     pub hypotheses: BTreeMap<String, Vec<String>>,
     pub lexical: BTreeMap<String, LexicalPatterns>,
-    pub neutral_hypothesis: String,
+    /// Single neutral hypothesis (legacy). Kept for backwards compat.
+    /// Prefer `neutral_hypotheses`.
+    #[serde(default)]
+    pub neutral_hypothesis: Option<String>,
+    /// Pool of competing neutral anchors. Empty list falls back to
+    /// `neutral_hypothesis` if present.
+    #[serde(default)]
+    pub neutral_hypotheses: Vec<String>,
     pub thresholds: BTreeMap<String, f32>,
     #[serde(default)]
     pub test_cases: Vec<TestCase>,

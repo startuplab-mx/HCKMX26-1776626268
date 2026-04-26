@@ -67,6 +67,14 @@ impl Classifier {
         self.pipeline.classify(text, context)
     }
 
+    pub fn classify_many(
+        &self,
+        texts: &[String],
+        context: &[String],
+    ) -> Result<Vec<Decision>> {
+        self.pipeline.classify_many(texts, context)
+    }
+
     pub fn cfg(&self) -> &RuntimeConfig {
         &self.pipeline.cfg
     }

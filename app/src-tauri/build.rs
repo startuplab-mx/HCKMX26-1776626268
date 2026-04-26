@@ -197,12 +197,23 @@ fn generate_runtime_json(manifest: &Path) -> Result<(), String> {
         lexical.insert(k.clone(), parse_json(&require(&lex_key)?, &lex_key)?);
     }
 
+    // Pool de neutrales: preferimos NEUTRAL_HYPOTHESES (lista JSON). Si sólo
+    // está el NEUTRAL_HYPOTHESIS legacy (string), lo envolvemos en lista para
+    // mantener compat con .env viejos.
+    let neutral_hypotheses_val: Value = match env.get("NEUTRAL_HYPOTHESES") {
+        Some(s) => parse_json(s, "NEUTRAL_HYPOTHESES")?,
+        None => {
+            let single = require("NEUTRAL_HYPOTHESIS")?;
+            json!([single])
+        }
+    };
+
     let runtime = json!({
         "model_id": require("NLI_MODEL")?,
         "category_keys": keys_val,
         "hypotheses": hypotheses,
         "lexical": lexical,
-        "neutral_hypothesis": require("NEUTRAL_HYPOTHESIS")?,
+        "neutral_hypotheses": neutral_hypotheses_val,
         "thresholds": parse_json(&require("THRESHOLDS")?, "THRESHOLDS")?,
         "test_cases": parse_json(&require("TEST_CASES")?, "TEST_CASES")?,
         "context_test_cases": parse_json(

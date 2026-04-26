@@ -43,21 +43,24 @@
   ],
   "hypotheses": {
     "cat_a": [
-      "Este mensaje ofrece trabajo en una organización criminal o cártel, con paga semanal en efectivo, sin contrato formal, dirigido a jóvenes sin experiencia",
-      "Este mensaje invita a unirse a un grupo criminal o a trabajar para un cártel",
-      "Este mensaje menciona cárteles mexicanos, narcos, sicarios o lenguaje codificado de la maña",
-      "Este mensaje pide contactar por WhatsApp o Telegram para una oferta laboral sospechosa dirigida a menores"
+      "El texto ofrece un trabajo de reclutamiento para el crimen organizado.",
+      "El texto recluta gente para un cártel o grupo criminal.",
+      "El texto promete pago semanal en efectivo sin requisitos ni contrato.",
+      "El texto usa lenguaje codificado de cárteles mexicanos.",
+      "El texto dirige una oferta laboral sospechosa a menores de edad."
     ],
     "cat_b": [
-      "Este mensaje contiene halagos románticos o sexuales explícitamente dirigidos a un niño, niña o adolescente",
-      "Este mensaje pide secreto a un niño o le dice que no cuente a sus padres",
-      "Este mensaje le pide a un niño, niña o adolescente que envíe fotos o videos íntimos o sexuales",
-      "Este mensaje le ofrece a un niño o adolescente dinero, regalos, recargas o saldo a cambio de fotos íntimas, encuentros o silencio sobre la conversación"
+      "El texto contiene insinuaciones sexuales hacia un menor de edad.",
+      "El texto pide a un menor que envíe fotos íntimas.",
+      "El texto pide a un menor mantener la conversación en secreto.",
+      "El texto ofrece dinero o regalos a un menor a cambio de favores sexuales.",
+      "El texto intenta aislar emocionalmente a un menor de su familia."
     ],
     "cat_c": [
-      "Este mensaje contiene amenazas de daño físico o de revelar información privada",
-      "Este mensaje exige dinero bajo coacción o intimidación",
-      "Este mensaje afirma conocer datos personales de la víctima o de su familia para amenazar"
+      "El texto amenaza con causar daño físico.",
+      "El texto exige dinero bajo coacción.",
+      "El texto amenaza con publicar información o fotos privadas.",
+      "El texto demuestra conocer datos personales de la víctima como amenaza."
     ]
   },
   "lexical": {
@@ -139,7 +142,12 @@
   "lexical_shortcut_score": 0.95,
   "max_context": 4,
   "model_id": "MoritzLaurer/mDeBERTa-v3-base-mnli-xnli",
-  "neutral_hypothesis": "Este mensaje es una conversación cotidiana e inofensiva entre familiares, amigos, compañeros de trabajo, vendedores o desconocidos sobre temas comunes como trabajo legítimo, dinero entre conocidos, salud, comida, planes, estudios o consejos.",
+  "neutral_hypotheses": [
+    "El texto es publicidad o descripción de un producto en venta.",
+    "El texto es una oferta laboral legítima de una empresa formal.",
+    "El texto es una conversación familiar cotidiana sobre planes, comida o estudios.",
+    "El texto es contenido informativo, noticia o reseña."
+  ],
   "test_cases": [
     {
       "expected": "cat_a",
@@ -204,11 +212,23 @@
     {
       "expected": null,
       "text": "¿Me deposites lo del cumpleaños cuando puedas? gracias hermano"
+    },
+    {
+      "expected": null,
+      "text": "8H Magic Night Sérum Capilar Nocturno, Tratamiento de Nutrición Intensa para Cabello"
+    },
+    {
+      "expected": null,
+      "text": "Envío gratis a todo México, paga a meses sin intereses con tarjeta participante"
+    },
+    {
+      "expected": null,
+      "text": "Política de privacidad y términos de uso. Aceptar cookies para continuar."
     }
   ],
   "thresholds": {
-    "cat_a": 0.75,
-    "cat_b": 0.55,
-    "cat_c": 0.7
+    "cat_a": 0.65,
+    "cat_b": 0.65,
+    "cat_c": 0.65
   }
 }

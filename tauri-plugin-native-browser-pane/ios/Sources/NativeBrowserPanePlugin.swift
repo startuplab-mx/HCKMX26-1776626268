@@ -450,8 +450,11 @@ class NativeBrowserPaneNavDelegate: NSObject, WKNavigationDelegate {
 /// de WKScriptMessageHandler).
 class FilterMessageHandler: NSObject, WKScriptMessageHandlerWithReply {
   static let ciContext = CIContext(options: nil)
+  // Serial: la Session ONNX en Rust ya está bajo Mutex. Permitir concurrencia
+  // aquí solo apila trabajo redundante en la cola del lock y multiplica los
+  // batches FFI (4 hilos disparando el mismo batch idéntico).
   static let workQueue = DispatchQueue(
-    label: "com.hackathon404.filter.work", qos: .userInitiated, attributes: .concurrent)
+    label: "com.hackathon404.filter.work", qos: .userInitiated)
 
   func userContentController(
     _ userContentController: WKUserContentController,

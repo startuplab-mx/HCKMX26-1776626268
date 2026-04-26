@@ -31,6 +31,40 @@ pub fn obscure_dashes(text: &str) -> String {
         .collect()
 }
 
+fn log_decision(text: &str, decision: &crate::Decision) {
+    // En el hot path solo emitimos log para acciones disruptivas (Avisar /
+    // Bloquear). Permitir es la mayoría — loggearla por texto (cada
+    // `eprintln!` en iOS pasa por el log subsystem y agrega ~5-15 ms) era
+    // un costo apreciable en batches grandes.
+    if !debug_enabled() {
+        return;
+    }
+    if matches!(decision.action, Action::Permitir) {
+        return;
+    }
+    let preview: String = text.chars().take(80).collect();
+    let scores: Vec<String> = decision
+        .scores
+        .iter()
+        .map(|(c, s)| format!("{c}={s:.2}"))
+        .collect();
+    eprintln!(
+        "[classifier-debug] action={:?} cats={:?} scores=[{}] text={:?}",
+        decision.action,
+        decision.categories,
+        scores.join(","),
+        preview
+    );
+}
+
+fn obscure_for(action: Action, text: &str) -> String {
+    match action {
+        Action::Bloquear => obscure_full(text),
+        Action::Avisar => obscure_dashes(text),
+        Action::Permitir => text.to_string(),
+    }
+}
+
 /// Aplica el clasificador a `text`. Devuelve el texto obscurecido según la acción.
 /// Maneja short-text passthrough y errores de inferencia (passthrough).
 pub fn apply_filter(classifier: &Classifier, text: &str) -> String {
@@ -39,26 +73,8 @@ pub fn apply_filter(classifier: &Classifier, text: &str) -> String {
     }
     match classifier.classify(text, &[]) {
         Ok(decision) => {
-            if debug_enabled() {
-                let preview: String = text.chars().take(80).collect();
-                let scores: Vec<String> = decision
-                    .scores
-                    .iter()
-                    .map(|(c, s)| format!("{c}={s:.2}"))
-                    .collect();
-                eprintln!(
-                    "[classifier-debug] action={:?} cats={:?} scores=[{}] text={:?}",
-                    decision.action,
-                    decision.categories,
-                    scores.join(","),
-                    preview
-                );
-            }
-            match decision.action {
-                Action::Bloquear => obscure_full(text),
-                Action::Avisar => obscure_dashes(text),
-                Action::Permitir => text.to_string(),
-            }
+            log_decision(text, &decision);
+            obscure_for(decision.action, text)
         }
         Err(e) => {
             eprintln!("[classifier] error: {e}");
@@ -67,7 +83,44 @@ pub fn apply_filter(classifier: &Classifier, text: &str) -> String {
     }
 }
 
-/// Versión batched para reducir overhead de IPC.
+/// Versión batched real: separa los textos demasiado cortos (passthrough) de
+/// los que valen la pena clasificar y manda una sola pasada NLI agrupando
+/// N premisas × H hipótesis (`Pipeline::classify_many`). Esto amortiza el
+/// overhead de tokenización + ONNX y el lock de la sesión.
 pub fn apply_filter_batch(classifier: &Classifier, texts: &[String]) -> Vec<String> {
-    texts.iter().map(|t| apply_filter(classifier, t)).collect()
+    let mut results: Vec<String> = vec![String::new(); texts.len()];
+    let mut to_classify: Vec<String> = Vec::with_capacity(texts.len());
+    let mut idx_map: Vec<usize> = Vec::with_capacity(texts.len());
+
+    for (i, t) in texts.iter().enumerate() {
+        if t.trim().chars().count() < MIN_TEXT_LEN_FOR_CLASSIFY {
+            results[i] = t.clone();
+        } else {
+            idx_map.push(i);
+            to_classify.push(t.clone());
+        }
+    }
+
+    if to_classify.is_empty() {
+        return results;
+    }
+
+    match classifier.classify_many(&to_classify, &[]) {
+        Ok(decisions) => {
+            for (k, decision) in decisions.into_iter().enumerate() {
+                let i = idx_map[k];
+                let text = &to_classify[k];
+                log_decision(text, &decision);
+                results[i] = obscure_for(decision.action, text);
+            }
+        }
+        Err(e) => {
+            eprintln!("[classifier] error (batch): {e}");
+            for (k, text) in to_classify.into_iter().enumerate() {
+                results[idx_map[k]] = text;
+            }
+        }
+    }
+
+    results
 }

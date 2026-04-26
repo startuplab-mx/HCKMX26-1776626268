@@ -59,10 +59,14 @@ impl NliBackend {
                 direction: TruncationDirection::Right,
             }))
             .map_err(|e| anyhow!("set truncation: {e}"))?;
+        // BatchLongest + pad_to_multiple_of=8 para SIMD-friendly attention.
+        // La gran mayoría de candidatos del DOM son < 80 tokens; pasar de
+        // pad fijo a 256 → batch dinámico recorta compute attention ~5-7×
+        // en el caso típico. Truncation sigue capada a max_length.
         tokenizer.with_padding(Some(PaddingParams {
-            strategy: PaddingStrategy::Fixed(meta.max_length),
+            strategy: PaddingStrategy::BatchLongest,
             direction: PaddingDirection::Right,
-            pad_to_multiple_of: None,
+            pad_to_multiple_of: Some(8),
             pad_id: 0,
             pad_type_id: 0,
             pad_token: "[PAD]".into(),
@@ -104,14 +108,52 @@ impl NliBackend {
             .iter()
             .map(|h| (premise.to_string(), h.clone()))
             .collect();
+        let scores = self.run_pairs(pairs)?;
+        Ok(scores)
+    }
 
+    /// Versión batched real de N premisas × H hipótesis. Devuelve una matriz
+    /// `out[i][j] = P(entail | premise_i, hypothesis_j)` en una sola
+    /// `session.run()` — amortiza el overhead de tokenización + ONNX cuando
+    /// se clasifican muchos textos a la vez.
+    pub fn entailment_scores_batch(
+        &self,
+        premises: &[String],
+        hypotheses: &[String],
+    ) -> Result<Vec<Vec<f32>>> {
+        if premises.is_empty() || hypotheses.is_empty() {
+            return Ok(vec![Vec::new(); premises.len()]);
+        }
+        let mut pairs: Vec<(String, String)> =
+            Vec::with_capacity(premises.len() * hypotheses.len());
+        for p in premises {
+            for h in hypotheses {
+                pairs.push((p.clone(), h.clone()));
+            }
+        }
+        let flat = self.run_pairs(pairs)?;
+        let h = hypotheses.len();
+        let mut out = Vec::with_capacity(premises.len());
+        for chunk in flat.chunks(h) {
+            out.push(chunk.to_vec());
+        }
+        Ok(out)
+    }
+
+    fn run_pairs(&self, pairs: Vec<(String, String)>) -> Result<Vec<f32>> {
         let encodings = self
             .tokenizer
             .encode_batch(pairs, true)
             .map_err(|e| anyhow!("encode_batch: {e}"))?;
 
         let batch = encodings.len();
-        let seq = self.max_length;
+        // Con BatchLongest todas las encodings ya tienen el mismo length;
+        // calculamos `seq` desde el primer encoding (capped por max_length).
+        let seq = encodings
+            .first()
+            .map(|e| e.get_ids().len())
+            .unwrap_or(0)
+            .min(self.max_length);
         let mut input_ids = Array2::<i64>::zeros((batch, seq));
         let mut attention_mask = Array2::<i64>::zeros((batch, seq));
         let mut token_type_ids = Array2::<i64>::zeros((batch, seq));
