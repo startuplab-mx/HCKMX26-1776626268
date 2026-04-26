@@ -69,6 +69,13 @@ La arquitectura prioriza tres principios: **privacidad por diseño** (cómputo l
   </tr>
 </table>
 
+<br/>
+
+<div align="center">
+  <img src="images/dash1.jpg" alt="Dashboard administrativo Sentinel" width="820" /><br/>
+  <sub><b>Dashboard administrativo</b> — KPIs en tiempo real, distribución por servicio, tendencias y feed de eventos en vivo</sub>
+</div>
+
 ---
 
 ## El problema
@@ -467,6 +474,13 @@ Ambas se leen y cachean en `common/src/lib.rs`.
     </td>
   </tr>
 </table>
+
+<br/>
+
+<div align="center">
+  <img src="images/dash1.jpg" alt="Dashboard administrativo Sentinel" width="820" /><br/>
+  <sub><b>Dashboard administrativo (Sentinel)</b> — vista del equipo supervisor: endpoints activos, requests bloqueadas, alertas, picos de latencia 24 h, distribución por servicio y feed de eventos en vivo</sub>
+</div>
 
 > **Cómo verlo en vivo.** Por la naturaleza nativa del proyecto (Tauri + ONNX Runtime + WKWebView/Android WebView) Shield se experimenta corriéndolo localmente. Sigue la sección de [Ejecución](#ejecución) y la guía de exports de modelos para tenerlo funcionando en tu máquina.
 
