@@ -525,6 +525,11 @@ hackathon404/
 El proyecto fue desarrollado íntegramente durante el hackathon, con el primer commit el **24 de abril de 2026** y el último el **25 de abril de 2026**.
 
 ---
+Video y presentación
+
+- [Video](https://www.youtube.com/shorts/qz5Yi9bTpBo)
+- [Drive](https://drive.google.com/drive/folders/1vloOeXzQ5M-zOa6bR9PGrKRbLV6HRmxj?usp=drive_link)
+---
 
 <div align="center">
 
