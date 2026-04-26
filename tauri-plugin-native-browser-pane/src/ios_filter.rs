@@ -84,17 +84,28 @@ pub extern "C" fn classifier_filter_texts(
         let outputs = match SHARED_CLASSIFIER.get() {
             Some(classifier) => {
                 let mut unique_out: Vec<String> = Vec::with_capacity(unique.len());
-                for chunk in unique.chunks(CHUNK_SIZE) {
+                let total_chunks = unique.len().div_ceil(CHUNK_SIZE);
+                let t_total = std::time::Instant::now();
+                for (idx, chunk) in unique.chunks(CHUNK_SIZE).enumerate() {
+                    let t = std::time::Instant::now();
                     let out = apply_filter_batch(classifier, chunk);
+                    eprintln!(
+                        "[plugin classifier] chunk {}/{} ({} texts) → {} ms",
+                        idx + 1,
+                        total_chunks,
+                        chunk.len(),
+                        t.elapsed().as_millis()
+                    );
                     unique_out.extend(out);
                 }
                 let expanded: Vec<String> =
                     map.iter().map(|&i| unique_out[i].clone()).collect();
                 eprintln!(
-                    "[plugin classifier] done: {}/{} outputs (classified {} unique)",
+                    "[plugin classifier] done: {}/{} outputs (classified {} unique) in {} ms",
                     expanded.len(),
                     inputs.len(),
-                    unique.len()
+                    unique.len(),
+                    t_total.elapsed().as_millis()
                 );
                 expanded
             }

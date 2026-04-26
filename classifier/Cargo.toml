@@ -23,8 +23,12 @@ ort = { version = "=2.0.0-rc.10", default-features = false, features = ["std", "
 # app/src-tauri/build.rs descarga el xcframework, hace lipo -thin, y emite los
 # rustc-link-* directamente. La inicialización del runtime se hace en
 # app/src-tauri/src/lib.rs llamando a ort::set_api() antes de cargar el modelo.
+# `coreml` expone CoreMLExecutionProvider — el binario de Microsoft ya viene
+# compilado con --use_coreml, por lo que la EP se registra al levantar la
+# Session; sin esta feature, ort no llama a SessionOptionsAppendExecutionProvider
+# y todo el grafo cae a CPU.
 [target.'cfg(target_os = "ios")'.dependencies]
-ort = { version = "=2.0.0-rc.10", default-features = false, features = ["std", "ndarray", "alternative-backend"] }
+ort = { version = "=2.0.0-rc.10", default-features = false, features = ["std", "ndarray", "alternative-backend", "coreml"] }
 
 # Android: deja que ort-sys haga su propio linking via ORT_LIB_LOCATION env var.
 [target.'cfg(target_os = "android")'.dependencies]

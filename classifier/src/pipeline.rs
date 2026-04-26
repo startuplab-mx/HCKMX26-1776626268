@@ -50,6 +50,15 @@ fn cache_key(text: &str, context: &[String]) -> u64 {
 }
 
 impl Pipeline {
+    /// Warmup ligero: una sola inferencia a batch=1 para forzar la carga
+    /// del modelo en memoria, allocators, etc. Como NLI ya no pasa por
+    /// CoreML en iOS (ver `ort_ep::apply_dynamic_shape_eps`), no hay
+    /// compilación AOT que amortizar — un warmup más pesado sólo
+    /// agregaría tiempo de startup sin beneficio.
+    pub fn warmup(&self) -> Result<()> {
+        self.nli.warmup()
+    }
+
     pub fn build(cfg: RuntimeConfig, nli: NliBackend) -> Result<Self> {
         let mut lex = BTreeMap::new();
         for cat in &cfg.category_keys {

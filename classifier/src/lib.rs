@@ -9,7 +9,10 @@ mod filter;
 mod image_classifier;
 mod lexical;
 mod nli;
+mod ort_ep;
 mod pipeline;
+
+pub(crate) use ort_ep::{apply_dynamic_shape_eps, apply_static_shape_eps};
 
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
@@ -84,5 +87,12 @@ impl Classifier {
 
     pub fn cfg(&self) -> &RuntimeConfig {
         &self.pipeline.cfg
+    }
+
+    /// Forza una inferencia dummy para que CoreML EP compile el modelo a
+    /// `.mlmodelc` durante el setup. Sin warmup, el primer `filter_texts`
+    /// del usuario paga 200ms-2s de compilación en iPhone.
+    pub fn warmup(&self) -> Result<()> {
+        self.pipeline.warmup()
     }
 }

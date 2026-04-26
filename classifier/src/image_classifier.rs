@@ -64,11 +64,17 @@ pub struct ImageClassifier {
 
 impl ImageClassifier {
     pub fn new(model_path: &Path, anchors_path: &Path) -> Result<Self> {
-        let session = Session::builder()
+        // iOS: 1 hilo (CoreML hace el trabajo pesado en ANE/GPU, hilos extra
+        // sólo añaden contention en los ops que caen a CPU fallback).
+        let intra_threads = if cfg!(target_os = "ios") { 1 } else { 2 };
+        let mut builder = Session::builder()
             .map_err(|e| anyhow!("ort builder: {e}"))?
             .with_optimization_level(GraphOptimizationLevel::Level3)
-            .map_err(|e| anyhow!("ort opt level: {e}"))?
-            .with_intra_threads(2)
+            .map_err(|e| anyhow!("ort opt level: {e}"))?;
+        builder = crate::apply_static_shape_eps(builder)
+            .map_err(|e| anyhow!("ort EPs: {e}"))?;
+        let session = builder
+            .with_intra_threads(intra_threads)
             .map_err(|e| anyhow!("ort threads: {e}"))?
             .commit_from_file(model_path)
             .map_err(|e| anyhow!("ort commit: {e}"))?;
@@ -91,6 +97,25 @@ impl ImageClassifier {
             anchors,
             n_risk: N_RISK_ANCHORS,
         })
+    }
+
+    /// Corre una inferencia con un tensor de zeros del shape correcto para que
+    /// CoreML EP compile el modelo a `.mlmodelc` en setup-time en vez de en la
+    /// primera imagen real. En desktop es ~5-10ms inocuos. Ignora errores:
+    /// si falla, la primera imagen real paga el costo.
+    pub fn warmup(&self) -> Result<()> {
+        let s = INPUT_SIZE as usize;
+        let tensor = Array4::<f32>::zeros((1, 3, s, s));
+        let mut session = self
+            .session
+            .lock()
+            .map_err(|e| anyhow!("session lock: {e}"))?;
+        let _ = session
+            .run(ort::inputs![
+                "image" => Tensor::from_array(tensor).map_err(|e| anyhow!("ort tensor: {e}"))?,
+            ])
+            .map_err(|e| anyhow!("ort run (warmup): {e}"))?;
+        Ok(())
     }
 
     /// Decide si los `bytes` corresponden a una imagen que debe censurarse.

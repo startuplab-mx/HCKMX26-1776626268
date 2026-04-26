@@ -563,6 +563,28 @@ pub fn run() {
             let emitter = EventEmitter::new();
             eprintln!("[event-emitter] server: {}", emitter.server_url);
             app.manage(emitter);
+
+            // Pre-compila los modelos en background. CoreML EP convierte el
+            // ONNX a `.mlmodelc` en la primera `session.run()` y eso bloquea
+            // el hilo (200ms-2s en iPhone para MobileCLIP). Hacerlo aquí en
+            // un hilo dedicado libera el setup y la primera petición real
+            // del usuario llega a una sesión ya compilada. En desktop el
+            // costo es ~10ms inocuos.
+            tauri::async_runtime::spawn_blocking(|| {
+                if let Some(c) = classifier::SHARED_CLASSIFIER.get() {
+                    match c.warmup() {
+                        Ok(_) => eprintln!("[classifier] warmup ok"),
+                        Err(e) => eprintln!("[classifier] warmup falló (no crítico): {e}"),
+                    }
+                }
+                if let Some(c) = classifier::SHARED_IMAGE_CLASSIFIER.get() {
+                    match c.warmup() {
+                        Ok(_) => eprintln!("[image_classifier] warmup ok"),
+                        Err(e) => eprintln!("[image_classifier] warmup falló (no crítico): {e}"),
+                    }
+                }
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

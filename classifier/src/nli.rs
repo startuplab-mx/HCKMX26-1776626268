@@ -59,10 +59,12 @@ impl NliBackend {
                 direction: TruncationDirection::Right,
             }))
             .map_err(|e| anyhow!("set truncation: {e}"))?;
-        // BatchLongest + pad_to_multiple_of=8 para SIMD-friendly attention.
-        // La gran mayoría de candidatos del DOM son < 80 tokens; pasar de
-        // pad fijo a 256 → batch dinámico recorta compute attention ~5-7×
-        // en el caso típico. Truncation sigue capada a max_length.
+        // BatchLongest + pad_to_multiple_of=8 en todas las plataformas.
+        // En desktop la mayoría de candidatos del DOM son < 80 tokens;
+        // pad dinámico recorta compute attention ~5-7× vs fijo a 256.
+        // En iOS NLI ahora corre en CPU (ver `apply_dynamic_shape_eps`),
+        // así que mismo razonamiento aplica — un fixed(max_length) sólo
+        // forzaría 3-5× más compute por nada.
         tokenizer.with_padding(Some(PaddingParams {
             strategy: PaddingStrategy::BatchLongest,
             direction: PaddingDirection::Right,
@@ -72,11 +74,22 @@ impl NliBackend {
             pad_token: "[PAD]".into(),
         }));
 
-        let session = Session::builder()
+        // intra_threads = 4 siempre, incluso en iOS. En el primer deploy
+        // probamos `1` con la teoría de que CoreML descargaría el cómputo
+        // pesado al ANE/GPU. En la práctica una parte no trivial del grafo
+        // NLI cae al CPU EP de fallback (ops no soportadas por CoreML EP,
+        // o dim batch dinámica que rechaza), y `1` thread sobre un batch
+        // ~156 × max_length tokens dejaba la sesión esencialmente colgada
+        // en device. `4` da headroom suficiente para que el peor caso
+        // (todo CPU) siga siendo de pocos segundos en vez de minutos.
+        let intra_threads = 4;
+        let mut builder = Session::builder()
             .map_err(ort_err)?
             .with_optimization_level(GraphOptimizationLevel::Level3)
-            .map_err(ort_err)?
-            .with_intra_threads(4)
+            .map_err(ort_err)?;
+        builder = crate::apply_dynamic_shape_eps(builder).map_err(ort_err)?;
+        let session = builder
+            .with_intra_threads(intra_threads)
             .map_err(ort_err)?
             .commit_from_file(model_path)
             .map_err(ort_err)?;
@@ -140,6 +153,40 @@ impl NliBackend {
         Ok(out)
     }
 
+    /// Ejecuta una inferencia dummy con un par premise/hypothesis del tamaño
+    /// máximo (`max_length`). En iOS esto fuerza a CoreML EP a compilar el
+    /// modelo a `.mlmodelc` durante el setup en vez de durante la primera
+    /// petición real del usuario. En desktop es ~10ms desperdiciados que no
+    /// afectan UX. Ignora cualquier error: el peor caso es que la primera
+    /// inferencia real pague el costo de compilación.
+    pub fn warmup(&self) -> Result<()> {
+        let batch = 1usize;
+        let seq = self.max_length;
+        let mut input_ids = Array2::<i64>::zeros((batch, seq));
+        // pad_id=0; insertamos un único token "1" en la posición 0 para que
+        // attention_mask=1 ahí no parezca todo padding (algunos exporters
+        // generan grafos que se atajan a cero si la mask es 0).
+        input_ids[[0, 0]] = 1;
+        let mut attention_mask = Array2::<i64>::zeros((batch, seq));
+        attention_mask[[0, 0]] = 1;
+        let token_type_ids = Array2::<i64>::zeros((batch, seq));
+
+        let mut session = self.session.lock().map_err(|e| anyhow!("session lock: {e}"))?;
+        let _ = if self.use_token_type_ids {
+            session.run(ort::inputs![
+                "input_ids" => Tensor::from_array(input_ids).map_err(ort_err)?,
+                "attention_mask" => Tensor::from_array(attention_mask).map_err(ort_err)?,
+                "token_type_ids" => Tensor::from_array(token_type_ids).map_err(ort_err)?,
+            ]).map_err(ort_err)?
+        } else {
+            session.run(ort::inputs![
+                "input_ids" => Tensor::from_array(input_ids).map_err(ort_err)?,
+                "attention_mask" => Tensor::from_array(attention_mask).map_err(ort_err)?,
+            ]).map_err(ort_err)?
+        };
+        Ok(())
+    }
+
     fn run_pairs(&self, pairs: Vec<(String, String)>) -> Result<Vec<f32>> {
         let encodings = self
             .tokenizer
@@ -172,6 +219,12 @@ impl NliBackend {
 
         let mut session = self.session.lock().map_err(|e| anyhow!("session lock: {e}"))?;
 
+        // Instrumentación iOS-only: si el primer batch tarda >>1s sospechamos
+        // re-compile CoreML por shape (warmup compiló (12*N,max_length); este
+        // batch puede ser otro). Sin estos logs el cuelgue es invisible.
+        #[cfg(target_os = "ios")]
+        let t_run = std::time::Instant::now();
+
         let outputs = if self.use_token_type_ids {
             session
                 .run(ort::inputs![
@@ -188,6 +241,14 @@ impl NliBackend {
                 ])
                 .map_err(ort_err)?
         };
+
+        #[cfg(target_os = "ios")]
+        eprintln!(
+            "[nli] session.run batch={} seq={} → {} ms",
+            batch,
+            seq,
+            t_run.elapsed().as_millis()
+        );
 
         let (_shape, logits) = outputs[0]
             .try_extract_tensor::<f32>()
